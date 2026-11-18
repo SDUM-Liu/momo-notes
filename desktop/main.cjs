@@ -5,23 +5,25 @@ const { openStore } = require('./data.cjs')
 const { fit, position, center, nearestEdge } = require('./window.cjs')
 const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
+const { createBrowser } = require('./browser.cjs')
+const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 
 app.setName('Momo Notes')
-app.setAppUserModelId('io.github.sdumliu.momo-notes')
+if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-notes')
+if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('ozone-platform', 'x11')
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
-let win, tray, store, drag, anchor, edge, today, dayTimer, updates
+let win, tray, store, drag, anchor, edge, today, dayTimer, updates, browser
 let mode = 'pet'
 let quitting = false
 let asking = false
 
 const currentArea = point => screen.getDisplayNearestPoint(point).workArea
-const loginOptions = () => app.isPackaged ? { path: process.execPath } : { path: process.execPath, args: [app.getAppPath()] }
 const publicSettings = () => {
   const { key, ...settings } = store.data.settings
-  return { ...settings, openAtLogin: app.getLoginItemSettings(loginOptions()).openAtLogin, hasKey: Boolean(key) }
+  return { ...settings, openAtLogin: opensAtLogin(), hasKey: Boolean(key) }
 }
-const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state })
+const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state, browser: browser.state })
 
 function syncState() {
   win.webContents.send('app:state-changed', state())
@@ -29,6 +31,7 @@ function syncState() {
 
 function setMode(next, activate = true) {
   mode = next
+  if (mode !== 'note') browser?.hide()
   win.setBounds(position(mode, currentArea(anchor), anchor, edge))
   syncState()
   if (activate && mode === 'note') {
@@ -63,6 +66,12 @@ function registerIPC() {
   handle('updates:check', updates.check)
   handle('updates:download', updates.download)
   handle('updates:install', updates.install)
+  handle('browser:open', browser.open)
+  handle('browser:viewport', bounds => {
+    if (mode === 'note' && Object.values(bounds).every(Number.isFinite)) browser.setViewport(bounds)
+  })
+  handle('browser:hide', browser.hide)
+  handle('browser:back', browser.back)
   on('window:drag-start', () => {
     drag = { start: screen.getCursorScreenPoint(), bounds: win.getBounds(), moved: false }
   })
@@ -129,7 +138,7 @@ function registerIPC() {
     return small.toDataURL()
   })
   handle('settings:save', values => {
-    const { alwaysOnTop, openAtLogin, snap, edgeImage, baseUrl, model, proxyPort, newKey } = values
+    const { alwaysOnTop, openAtLogin, snap, edgeImage, baseUrl, model, proxyPort, newKey, autoInstallUpdates } = values
     if (baseUrl) endpoint(baseUrl)
     if (proxyPort && (!/^\d{1,5}$/.test(proxyPort) || Number(proxyPort) < 1 || Number(proxyPort) > 65535)) {
       throw new Error('代理端口应为 1–65535 的整数')
@@ -138,20 +147,22 @@ function registerIPC() {
     const oldSettings = store.data.settings
     let key = oldSettings.key
     if (newKey !== null) {
-      if (newKey && !safeStorage.isEncryptionAvailable()) throw new Error('Windows 凭据加密暂不可用')
+      const insecureLinuxStorage = process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
+      if (newKey && (!safeStorage.isEncryptionAvailable() || insecureLinuxStorage)) throw new Error('系统凭据加密暂不可用')
       key = newKey ? safeStorage.encryptString(newKey).toString('base64') : ''
     }
-    const previousLogin = app.getLoginItemSettings(loginOptions()).openAtLogin
-    const settings = { alwaysOnTop, openAtLogin, snap, edgeImage, baseUrl, model, proxyPort, key }
+    const previousLogin = opensAtLogin()
+    const settings = { alwaysOnTop, openAtLogin, snap, edgeImage, baseUrl, model, proxyPort, key, autoInstallUpdates: Boolean(autoInstallUpdates) }
     try {
-      if (openAtLogin !== previousLogin) app.setLoginItemSettings({ ...loginOptions(), openAtLogin })
-      if (app.getLoginItemSettings(loginOptions()).openAtLogin !== openAtLogin) throw new Error('Windows 未接受开机启动设置')
+      if (openAtLogin !== previousLogin) setOpenAtLogin(openAtLogin)
+      if (opensAtLogin() !== openAtLogin) throw new Error('系统未接受开机启动设置')
       store.update({ settings })
     } catch (error) {
-      if (openAtLogin !== previousLogin) app.setLoginItemSettings({ ...loginOptions(), openAtLogin: previousLogin })
+      if (openAtLogin !== previousLogin) setOpenAtLogin(previousLogin)
       throw error
     }
     win.setAlwaysOnTop(alwaysOnTop)
+    updates.setAutomatic(settings.autoInstallUpdates)
     syncState()
     return publicSettings()
   })
@@ -168,6 +179,7 @@ function registerIPC() {
 
 function start() {
   store = openStore(app.getPath('userData'))
+  app.dock?.hide()
   today = store.today()
   const area = screen.getPrimaryDisplay().workArea
   const previous = store.data.position
@@ -196,6 +208,10 @@ function start() {
   updates = createUpdates(value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
   })
+  updates.setAutomatic(store.data.settings.autoInstallUpdates)
+  browser = createBrowser(win, value => {
+    if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
+  })
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
   win.on('close', event => {
@@ -203,6 +219,7 @@ function start() {
     event.preventDefault()
     setMode('pet', false)
   })
+  win.on('closed', browser.dispose)
   win.loadFile(path.join(__dirname, '../dist/index.html'))
 
   tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 32, height: 32 }))

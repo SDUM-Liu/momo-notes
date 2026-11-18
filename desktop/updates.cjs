@@ -1,7 +1,10 @@
 const { app } = require('electron')
+const { existsSync } = require('node:fs')
+const { join } = require('node:path')
 
 function createUpdates(onChange) {
-  const supported = app.isPackaged && process.platform === 'win32'
+  const supported = app.isPackaged && (process.platform !== 'linux' || Boolean(process.env.APPIMAGE))
+    && existsSync(join(process.resourcesPath, 'app-update.yml'))
   let state = { status: supported ? 'idle' : 'unavailable', version: app.getVersion() }
   const updater = supported ? require('electron-updater').autoUpdater : null
   let startupTimer, interval
@@ -30,8 +33,12 @@ function createUpdates(onChange) {
     show('checking')
     try {
       const result = await updater.checkForUpdates()
-      if (result?.isUpdateAvailable) show('available', { target: result.updateInfo.version })
-      else show('current')
+      if (result?.isUpdateAvailable) {
+        show('available', { target: result.updateInfo.version })
+        if (updater.autoInstallOnAppQuit) void download()
+      } else {
+        show('current')
+      }
     } catch (error) {
       console.error('Update check failed:', error.message)
       show('check-error')
@@ -66,6 +73,13 @@ function createUpdates(onChange) {
     check,
     download,
     install,
+    setAutomatic(enabled) {
+      if (!updater || enabled === updater.autoInstallOnAppQuit) return
+      updater.autoInstallOnAppQuit = enabled
+      if (!enabled) return
+      if (state.status === 'ready') show('available')
+      if (['available', 'download-error'].includes(state.status)) void download()
+    },
     schedule() {
       if (!supported) return
       startupTimer = setTimeout(check, 5000)

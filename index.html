@@ -2,19 +2,21 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>桃桃便签</title>
 </head>
 <body>
   <button id="mascot" class="mascot" title="单击打开便签，拖动可移动" aria-label="打开便签">
     <img id="mascot-image" alt="" draggable="false">
+    <span class="mobile-caption">打开便签</span>
   </button>
   <main id="panel" class="panel" hidden>
     <header class="top">
       <div id="title-drag" class="title-drag"><span class="brand-dot"></span>桃桃便签</div>
       <nav aria-label="便签工具">
         <button id="history" data-icon="calendar" title="历史便签" aria-label="历史便签"></button>
+        <button id="browser" data-icon="globe" title="内置浏览器" aria-label="内置浏览器"></button>
         <button id="question" data-icon="sparkles" title="问便签 AI" aria-label="问便签 AI"></button>
         <button id="settings" data-icon="settings" title="设置" aria-label="设置"></button>
       </nav>
@@ -35,6 +37,7 @@
         <button data-edit="bulletList" data-icon="list" title="项目符号" aria-label="项目符号"></button>
         <button data-edit="orderedList" data-icon="list-ordered" title="普通编号" aria-label="普通编号"></button>
         <i></i>
+        <button id="insert-link" data-icon="link" title="插入链接" aria-label="插入链接"></button>
         <button id="insert-image" data-icon="image" title="插入图片" aria-label="插入图片"></button>
         <button id="table-tools" data-icon="table-2" title="插入与编辑表格" aria-label="插入与编辑表格"></button>
         <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden>
@@ -44,8 +47,26 @@
         <button data-table="addColumnAfter">添加列</button><button data-table="deleteRow">删除行</button>
         <button data-table="deleteColumn">删除列</button><button data-table="deleteTable">删除表格</button>
       </div>
+      <form id="link-form" class="link-form" hidden>
+        <label>链接地址<input id="link-url" type="url" inputmode="url" placeholder="https://…" required></label>
+        <label id="link-label-row">显示文字<input id="link-label" placeholder="默认使用链接地址"></label>
+        <div class="link-actions"><button id="link-cancel" type="button" class="quiet">取消</button><button type="submit" class="primary">确认</button></div>
+        <span id="link-error" role="status" class="error"></span>
+      </form>
       <div id="editor" class="editor-scroll"></div>
       <footer class="foot"><span id="status" role="status"></span><span id="progress"></span></footer>
+    </section>
+    <section id="browser-view" class="view" hidden>
+      <form id="browser-bar">
+        <button id="back-note" type="button" class="quiet">返回便签</button>
+        <button id="browser-back" type="button" class="quiet" aria-label="网页后退" title="网页后退">‹</button>
+        <input id="browser-url" type="url" inputmode="url" aria-label="网址" placeholder="https://…" required>
+        <button class="quiet" type="submit">打开</button>
+      </form>
+      <span id="browser-status" role="status"></span>
+      <div id="browser-viewport">
+        <p id="browser-empty">输入网址，或点击便签中的链接。</p>
+      </div>
     </section>
     <section id="history-view" class="view sub-view" hidden>
       <div class="subhead"><h1>历史便签</h1><button class="quiet back">返回</button></div>
@@ -54,7 +75,7 @@
     <section id="settings-view" class="view sub-view" hidden>
       <div class="subhead"><h1>设置</h1><button class="quiet back">返回</button></div>
       <form id="settings-form">
-        <div class="settings-group">
+        <div class="settings-group desktop-only">
           <label class="switch-row">窗口置顶<input id="pin" type="checkbox" role="switch"></label>
           <label class="switch-row">开机启动<input id="startup" type="checkbox" role="switch"></label>
           <label class="switch-row">拖至屏幕边缘时收起<input id="snap" type="checkbox" role="switch"></label>
@@ -73,13 +94,16 @@
           <button id="update-action" type="button" class="quiet">检查更新</button>
           <progress id="update-progress" max="100" aria-label="更新下载进度" hidden></progress>
         </div>
+        <label id="automatic-update-row" class="switch-row update-setting desktop-only">
+          后台下载，退出时自动安装<input id="automatic-update" type="checkbox" role="switch">
+        </label>
         <h2>AI 连接</h2>
         <fieldset class="settings-group fields">
           <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>
           <label>模型<input id="model" placeholder="服务方提供的模型 ID" maxlength="150"></label>
           <label>API 密钥<input id="api-key" type="password" autocomplete="off" maxlength="1000"></label>
           <button id="clear-key" class="quiet" type="button">清除已存密钥</button>
-          <label>本地 HTTP 代理端口<input id="proxy" inputmode="numeric" placeholder="留空直连" maxlength="5"></label>
+          <label class="desktop-only">本地 HTTP 代理端口<input id="proxy" inputmode="numeric" placeholder="留空直连" maxlength="5"></label>
         </fieldset>
       </form>
       <div class="subfoot"><span id="settings-status" role="status"></span><button type="submit" form="settings-form" class="primary">保存设置</button></div>

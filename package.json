@@ -1,12 +1,16 @@
 {
   "name": "momo-notes",
-  "version": "0.1.1",
-  "description": "A Windows desktop companion for daily notes and checklists",
+  "version": "0.2.0",
+  "description": "A desktop and mobile companion for daily notes and checklists",
   "main": "desktop/main.cjs",
   "scripts": {
     "start": "vite build && electron .",
     "build": "vite build",
-    "dist": "npm run build && electron-builder --win nsis --x64 --publish never"
+    "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:linux": "npm run build && electron-builder --linux AppImage --x64 --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --publish never",
+    "dist:mac:preview": "npm run build && electron-builder --mac dmg zip --config build/unsigned-mac.cjs --publish never",
+    "mobile:sync": "npm run build && cap sync"
   },
   "keywords": [],
   "author": "SDUM-Liu",
@@ -16,6 +20,13 @@
     "electron-updater": "^6.8.11"
   },
   "devDependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.1",
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/inappbrowser": "^4.1.0",
+    "@capacitor/ios": "^8.6.2",
     "@tiptap/core": "^3.34.0",
     "@tiptap/extension-image": "^3.34.0",
     "@tiptap/extension-list": "^3.34.0",
@@ -33,6 +44,6 @@
     "url": "https://github.com/SDUM-Liu/momo-notes.git"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=22.12.0"
   }
 }

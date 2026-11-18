@@ -4,14 +4,16 @@ import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
 import { Image } from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extension-placeholder'
+import { linkOrNull, webUrl } from '../shared/links.mjs'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
 import './style.css'
 
-const api = window.momo
+const api = window.momo ?? (await import('./mobile-bridge.js')).createMobileBridge()
+if (api.mobile) document.body.dataset.platform = 'mobile'
 const $ = id => document.getElementById(id)
-const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,image,table-2}.svg', {
+const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,globe,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,link,image,table-2}.svg', {
   query: '?raw', import: 'default', eager: true,
 })
 for (const button of document.querySelectorAll('[data-icon]')) {
@@ -25,6 +27,7 @@ let state, currentDate, today, editor
 let edgeDraft = ''
 let clearKey = false
 let updateState
+let browserState
 let view = 'note'
 let saveQueue = Promise.resolve()
 let pageRequest = 0
@@ -41,14 +44,18 @@ function noteStatus(message, error = false) {
 }
 
 function showView(next) {
+  if (view === 'browser' && next !== 'browser') void api.hideBrowser()
   view = next
-  for (const name of ['note', 'history', 'settings', 'ai']) {
+  for (const name of ['note', 'history', 'settings', 'ai', 'browser']) {
     $(name + '-view').hidden = name !== next
   }
   $('history').classList.toggle('active', next === 'history')
+  $('browser').classList.toggle('active', next === 'browser')
   $('settings').classList.toggle('active', next === 'settings')
   $('question').classList.toggle('active', next === 'ai')
   $('table-menu').hidden = true
+  $('link-form').hidden = true
+  if (next === 'browser') sendBrowserViewport()
   if (next === 'note' && followNewDay && !editor.view.composing) void loadNote()
 }
 
@@ -57,6 +64,7 @@ function drawState(value) {
   state = value
   today = state.today
   drawUpdate(state.update)
+  drawBrowser(state.browser)
   document.body.dataset.mode = state.mode
   document.body.dataset.edge = state.edge ?? ''
   $('panel').hidden = state.mode !== 'note'
@@ -137,6 +145,10 @@ async function loadNote(date) {
 }
 
 function wireDrag(element, click) {
+  if (api.mobile) {
+    if (click) element.addEventListener('click', click)
+    return
+  }
   let active = false
   let pointer
   element.addEventListener('pointerdown', event => {
@@ -171,6 +183,74 @@ wireDrag($('mascot'), () => api.toggle())
 wireDrag($('title-drag'))
 $('return-today').onclick = () => loadNote()
 for (const back of document.querySelectorAll('.back')) back.onclick = () => showView('note')
+
+function sendBrowserViewport() {
+  if (view !== 'browser' || state?.mode !== 'note') return
+  const { x, y, width, height } = $('browser-viewport').getBoundingClientRect()
+  void api.browserViewport({ x, y, width, height })
+}
+
+function drawBrowser(value) {
+  browserState = value
+  if (document.activeElement !== $('browser-url')) $('browser-url').value = value.url
+  $('browser-back').disabled = !value.canGoBack
+  $('browser-empty').hidden = Boolean(value.url) && !api.mobile
+  $('browser-status').textContent = value.error || (value.loading ? '正在加载…' : '')
+  if (value.closed && view === 'browser') showView('note')
+}
+
+async function openPage(value) {
+  try {
+    const url = webUrl(value)
+    await saveBeforeSwitch()
+    showView('browser')
+    $('browser-url').value = url
+    await api.openBrowser(url)
+  } catch (error) {
+    if (view === 'browser') $('browser-status').textContent = errorMessage(error)
+    else noteStatus(errorMessage(error), true)
+  }
+}
+
+new ResizeObserver(sendBrowserViewport).observe($('browser-viewport'))
+$('browser').onclick = () => {
+  const next = view === 'browser' ? 'note' : 'browser'
+  showView(next)
+  if (next === 'browser' && !browserState?.url) $('browser-url').focus()
+}
+$('back-note').onclick = () => showView('note')
+$('browser-back').onclick = () => api.browserBack()
+$('browser-bar').onsubmit = event => {
+  event.preventDefault()
+  void openPage($('browser-url').value)
+}
+
+$('insert-link').onmousedown = event => event.preventDefault()
+$('insert-link').onclick = () => {
+  $('table-menu').hidden = true
+  $('link-form').hidden = false
+  $('link-url').value = editor.getAttributes('link').href ?? ''
+  $('link-label').value = ''
+  $('link-label-row').hidden = !editor.state.selection.empty || editor.isActive('link')
+  $('link-error').textContent = ''
+  $('link-url').focus()
+}
+$('link-cancel').onclick = () => {
+  $('link-form').hidden = true
+  editor.commands.focus()
+}
+$('link-form').onsubmit = event => {
+  event.preventDefault()
+  try {
+    const href = webUrl($('link-url').value)
+    const chain = editor.chain().focus()
+    if ($('link-label-row').hidden) chain.extendMarkRange('link').setLink({ href }).run()
+    else chain.insertContent({ type: 'text', text: $('link-label').value.trim() || href, marks: [{ type: 'link', attrs: { href } }] }).run()
+    $('link-form').hidden = true
+  } catch (error) {
+    $('link-error').textContent = errorMessage(error)
+  }
+}
 
 $('history').onclick = async () => {
   if (view === 'history') return showView('note')
@@ -213,6 +293,7 @@ for (const button of document.querySelectorAll('[data-edit]')) {
 
 $('table-tools').onmousedown = event => event.preventDefault()
 $('table-tools').onclick = () => {
+  $('link-form').hidden = true
   const inTable = editor.isActive('table')
   for (const button of $('table-menu').children) button.disabled = button.dataset.table !== 'insertTable' && !inTable
   $('table-menu').hidden = !$('table-menu').hidden
@@ -273,7 +354,8 @@ function drawUpdate(update) {
   const { status, target, progress } = update
   const messages = {
     idle: '',
-    unavailable: '在线更新适用于 Windows 安装版',
+    unavailable: '请使用对应平台的安装包更新',
+    mobile: '通过该平台的安装渠道更新',
     checking: '正在检查更新…',
     current: '已是最新版本',
     available: '可更新至 v' + target,
@@ -293,7 +375,9 @@ function drawUpdate(update) {
   $('update-status').classList.toggle('error', status.endsWith('-error'))
   $('settings').toggleAttribute('data-update', ['available', 'ready', 'downloading', 'download-error', 'install-error'].includes(status))
   $('update-action').textContent = actionLabels[status] ?? '检查更新'
-  $('update-action').disabled = ['unavailable', 'checking', 'downloading', 'installing'].includes(status)
+  $('update-action').hidden = status === 'mobile'
+  $('update-action').disabled = ['unavailable', 'mobile', 'checking', 'downloading', 'installing'].includes(status)
+  $('automatic-update-row').hidden = ['unavailable', 'mobile'].includes(status)
   $('update-progress').hidden = status !== 'downloading'
   if (progress === undefined) $('update-progress').removeAttribute('value')
   else $('update-progress').value = progress
@@ -324,6 +408,7 @@ $('settings').onclick = () => {
   $('pin').checked = settings.alwaysOnTop
   $('startup').checked = settings.openAtLogin
   $('snap').checked = settings.snap
+  $('automatic-update').checked = Boolean(settings.autoInstallUpdates)
   $('base-url').value = settings.baseUrl
   $('model').value = settings.model
   $('proxy').value = settings.proxyPort
@@ -365,6 +450,7 @@ $('settings-form').onsubmit = async event => {
   try {
     state.settings = await api.saveSettings({
       alwaysOnTop: $('pin').checked, openAtLogin: $('startup').checked, snap: $('snap').checked,
+      autoInstallUpdates: $('automatic-update').checked,
       edgeImage: edgeDraft, baseUrl: $('base-url').value.trim(), model: $('model').value.trim(),
       proxyPort: $('proxy').value.trim(), newKey: key || (clearKey ? '' : null),
     })
@@ -405,7 +491,7 @@ async function init() {
   editor = new Editor({
     element: $('editor'),
     extensions: [
-      StarterKit.configure({ link: { openOnClick: false } }),
+      StarterKit.configure({ link: { openOnClick: false, defaultProtocol: 'https', isAllowedUri: url => Boolean(linkOrNull(url)) } }),
       TaskList, TaskItem.configure({
         nested: true,
         a11y: { checkboxLabel: node => node.attrs.checked ? '恢复为待办' : '标记完成' },
@@ -416,6 +502,13 @@ async function init() {
     ],
     editorProps: {
       attributes: { 'aria-label': '便签正文', spellcheck: 'false' },
+      handleClick(_view, _pos, event) {
+        const href = event.target.closest?.('a[href]')?.getAttribute('href')
+        if (!href) return false
+        event.preventDefault()
+        void openPage(href)
+        return true
+      },
       handlePaste(_view, event) {
         const files = imageFiles(event.clipboardData)
         if (!files.length) return false
@@ -438,6 +531,7 @@ async function init() {
   })
   api.onState(drawState)
   api.onUpdate(drawUpdate)
+  api.onBrowser(drawBrowser)
   api.onDay(next => {
     followNewDay ||= currentDate === today
     today = next

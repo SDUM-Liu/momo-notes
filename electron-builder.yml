@@ -4,6 +4,7 @@ directories:
   output: release
 files:
   - desktop/**
+  - shared/**
   - dist/**
   - build/icon.png
   - LICENSE
@@ -16,6 +17,16 @@ publish:
 win:
   icon: build/icon.png
   artifactName: Momo-Notes-${version}-Setup-${arch}.${ext}
+mac:
+  icon: build/icon.png
+  category: public.app-category.productivity
+  target: [zip, dmg]
+  artifactName: Momo-Notes-${version}-mac-${arch}.${ext}
+linux:
+  icon: build/icon.png
+  category: Office
+  target: [AppImage]
+  artifactName: Momo-Notes-${version}-linux-${arch}.${ext}
 nsis:
   oneClick: false
   perMachine: false
