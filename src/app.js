@@ -202,6 +202,7 @@ function drawBrowser(value) {
 async function openPage(value) {
   try {
     const url = webUrl(value)
+    $('browser-url').blur()
     await saveBeforeSwitch()
     showView('browser')
     $('browser-url').value = url

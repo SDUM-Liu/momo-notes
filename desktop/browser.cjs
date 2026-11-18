@@ -47,9 +47,10 @@ function createBrowser(win, onChange) {
     }
     webContents.on('did-start-loading', () => send({ loading: true, error: '' }))
     webContents.on('did-stop-loading', () => send({ loading: false }))
-    for (const eventName of ['did-navigate', 'did-navigate-in-page']) {
-      webContents.on(eventName, (_event, url) => send({ url, error: '' }))
-    }
+    webContents.on('did-navigate', (_event, url) => send({ url, error: '' }))
+    webContents.on('did-navigate-in-page', (_event, url, mainFrame) => {
+      if (mainFrame) send({ url, error: '' })
+    })
     webContents.on('did-fail-load', (_event, code, _reason, url, mainFrame) => {
       if (mainFrame && code !== -3) send({ url, error: '网页加载失败，请检查链接和网络后重试。' })
     })
