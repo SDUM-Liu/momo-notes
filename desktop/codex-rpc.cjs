@@ -36,6 +36,9 @@ function appServer({ cwd, noteMode = false, onRequest = async () => undefined, l
   const env = { ...process.env }
   delete env.OPENAI_API_KEY
   delete env.CODEX_API_KEY
+  // This process uses the standalone CLI and has no ChatGPT desktop package identity.
+  delete env.CODEX_WINDOWS_REGISTERED_CORE
+  delete env.CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY
   const child = launch(codexExecutable(), args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   const events = new EventEmitter()
   const pending = new Map()

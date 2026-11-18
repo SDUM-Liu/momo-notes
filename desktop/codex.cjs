@@ -276,7 +276,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
       try {
         const client = await workClient()
         const access = config.write ? 'workspace-write' : 'read-only'
-        const opts = { cwd: folder, runtimeWorkspaceRoots: [folder], sandbox: access, approvalPolicy: 'on-request', approvalsReviewer: 'user' }
+        const opts = { cwd: folder, sandbox: access, approvalPolicy: 'on-request', approvalsReviewer: 'user' }
         if (request.id) {
           const { thread } = await threadInScope(request.id, paired)
           if (thread.status?.type === 'active') throw new Error('原会话正在运行，请等它结束后再续接')
@@ -287,7 +287,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
         if (paired && !request.id) await share(response.thread.id, true)
         job.threadId = response.thread.id
         await turn(client, job, prompt, {
-          cwd: folder, runtimeWorkspaceRoots: [folder], approvalPolicy: 'on-request', approvalsReviewer: 'user',
+          cwd: folder, approvalPolicy: 'on-request', approvalsReviewer: 'user',
           sandboxPolicy: config.write
             ? { type: 'workspaceWrite', writableRoots: [folder], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
             : { type: 'readOnly', networkAccess: false },
