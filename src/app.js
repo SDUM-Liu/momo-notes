@@ -412,6 +412,7 @@ $('settings').onclick = () => {
   $('base-url').value = settings.baseUrl
   $('model').value = settings.model
   $('proxy').value = settings.proxyPort
+  $('proxy').placeholder = api.mobile ? '留空使用系统网络' : '留空直连'
   $('api-key').value = ''
   $('api-key').placeholder = settings.hasKey ? '已保存 · 留空保留' : '本地服务可留空'
   clearKey = false

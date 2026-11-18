@@ -1,13 +1,14 @@
 import { App } from '@capacitor/app'
-import { Capacitor, CapacitorHttp } from '@capacitor/core'
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core'
 import { InAppBrowser, DefaultWebViewOptions, ToolbarPosition } from '@capacitor/inappbrowser'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { defaultSettings, emptyNote, hasContent, localDay } from '../shared/notes.mjs'
-import { endpoint, modelAnswer, modelPayload } from '../shared/ai.mjs'
+import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
 import { webUrl } from '../shared/links.mjs'
 
 const keyName = 'ai-key'
 const noop = () => {}
+const proxy = registerPlugin('MomoProxy')
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -106,9 +107,10 @@ export function createMobileBridge() {
       return { date: day, doc: notes[day], today }
     },
     saveNote,
-    async saveSettings({ newKey, baseUrl, model }) {
+    async saveSettings({ newKey, baseUrl, model, proxyPort }) {
       if (baseUrl) endpoint(baseUrl)
-      const next = { ...settings, baseUrl, model }
+      validateProxyPort(proxyPort)
+      const next = { ...settings, baseUrl, model, proxyPort }
       if (newKey !== null) {
         if (!native && newKey) throw new Error('请在移动安装版中保存密钥')
         if (native && newKey) await SecureStorage.setItem(keyName, newKey)
@@ -123,10 +125,17 @@ export function createMobileBridge() {
       const data = modelPayload({ notes, settings }, request)
       if (!native) throw new Error('请在移动安装版中连接 AI')
       const key = await SecureStorage.getItem(keyName)
+      const url = endpoint(settings.baseUrl).href
+      const authorization = key ? 'Bearer ' + key : ''
+      if (settings.proxyPort) {
+        const result = await proxy.post({ url, port: Number(settings.proxyPort), body: JSON.stringify(data), authorization })
+        if (result.status < 200 || result.status >= 300) throw new Error('AI API 返回 HTTP ' + result.status)
+        return modelAnswer(JSON.parse(result.body))
+      }
       const result = await CapacitorHttp.post({
-        url: endpoint(settings.baseUrl).href,
+        url,
         data,
-        headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
+        headers: { 'Content-Type': 'application/json', ...(authorization ? { Authorization: authorization } : {}) },
         connectTimeout: 15000, readTimeout: 45000, disableRedirects: true,
       })
       if (result.status < 200 || result.status >= 300) throw new Error('AI API 返回 HTTP ' + result.status)

@@ -2,6 +2,12 @@ import { nodeText } from './notes.mjs'
 
 const MAX_CONTEXT = 24000
 
+export function validateProxyPort(value) {
+  if (value && (!/^\d{1,5}$/.test(value) || Number(value) < 1 || Number(value) > 65535)) {
+    throw new Error('代理端口应为 1–65535 的整数')
+  }
+}
+
 export function endpoint(baseUrl) {
   const url = new URL(baseUrl)
   if (url.username || url.password || url.search || url.hash) throw new Error('API 地址不能包含账号、查询参数或片段')

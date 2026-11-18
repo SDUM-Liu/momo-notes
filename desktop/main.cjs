@@ -7,6 +7,7 @@ const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
+const { validateProxyPort } = require('../shared/ai.mjs')
 
 app.setName('Momo Notes')
 if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-notes')
@@ -140,9 +141,7 @@ function registerIPC() {
   handle('settings:save', values => {
     const { alwaysOnTop, openAtLogin, snap, edgeImage, baseUrl, model, proxyPort, newKey, autoInstallUpdates } = values
     if (baseUrl) endpoint(baseUrl)
-    if (proxyPort && (!/^\d{1,5}$/.test(proxyPort) || Number(proxyPort) < 1 || Number(proxyPort) > 65535)) {
-      throw new Error('代理端口应为 1–65535 的整数')
-    }
+    validateProxyPort(proxyPort)
     if (edgeImage && !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(edgeImage)) throw new Error('侧边栏图片格式有误')
     const oldSettings = store.data.settings
     let key = oldSettings.key
