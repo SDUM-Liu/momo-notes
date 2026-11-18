@@ -75,7 +75,9 @@ jobs:
           cache: gradle
       - run: npm ci
       - run: npm run mobile:sync -- android
-      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-36 build-tools;36.0.0
       - run: bash gradlew --no-daemon assembleDebug
         working-directory: android
       - uses: actions/upload-artifact@v4
