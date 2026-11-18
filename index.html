@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>桃桃便签</title>
+</head>
+<body>
+  <button id="mascot" class="mascot" title="单击打开便签，拖动可移动" aria-label="打开便签">
+    <img id="mascot-image" alt="" draggable="false">
+  </button>
+  <main id="panel" class="panel" hidden>
+    <header class="top">
+      <div id="title-drag" class="title-drag"><span class="brand-dot"></span>桃桃便签</div>
+      <nav aria-label="便签工具">
+        <button id="history" data-icon="calendar" title="历史便签" aria-label="历史便签"></button>
+        <button id="question" data-icon="sparkles" title="问便签 AI" aria-label="问便签 AI"></button>
+        <button id="settings" data-icon="settings" title="设置" aria-label="设置"></button>
+      </nav>
+    </header>
+    <section id="note-view" class="view">
+      <div class="date-line">
+        <div><div id="date-caption" class="date-caption"></div><h1 id="note-date"></h1></div>
+        <button id="return-today" class="quiet" hidden>回到今天</button>
+      </div>
+      <div class="toolbar" role="toolbar" aria-label="编辑格式">
+        <button data-edit="bold" data-icon="bold" title="粗体 Ctrl+B" aria-label="粗体"></button>
+        <button data-edit="italic" data-icon="italic" title="斜体 Ctrl+I" aria-label="斜体"></button>
+        <button data-edit="underline" data-icon="underline" title="下划线 Ctrl+U" aria-label="下划线"></button>
+        <button data-edit="strike" data-icon="strikethrough" title="删除线" aria-label="删除线"></button>
+        <i></i>
+        <button data-edit="heading" data-icon="heading" title="二级标题" aria-label="二级标题"></button>
+        <button data-edit="taskList" data-icon="list-checks" title="编号待办" aria-label="编号待办"></button>
+        <button data-edit="bulletList" data-icon="list" title="项目符号" aria-label="项目符号"></button>
+        <button data-edit="orderedList" data-icon="list-ordered" title="普通编号" aria-label="普通编号"></button>
+        <i></i>
+        <button id="insert-image" data-icon="image" title="插入图片" aria-label="插入图片"></button>
+        <button id="table-tools" data-icon="table-2" title="插入与编辑表格" aria-label="插入与编辑表格"></button>
+        <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden>
+      </div>
+      <div id="table-menu" class="table-menu" hidden>
+        <button data-table="insertTable">插入 3×3 表格</button><button data-table="addRowAfter">添加行</button>
+        <button data-table="addColumnAfter">添加列</button><button data-table="deleteRow">删除行</button>
+        <button data-table="deleteColumn">删除列</button><button data-table="deleteTable">删除表格</button>
+      </div>
+      <div id="editor" class="editor-scroll"></div>
+      <footer class="foot"><span id="status" role="status"></span><span id="progress"></span></footer>
+    </section>
+    <section id="history-view" class="view sub-view" hidden>
+      <div class="subhead"><h1>历史便签</h1><button class="quiet back">返回</button></div>
+      <div id="dates" class="dates"></div>
+    </section>
+    <section id="settings-view" class="view sub-view" hidden>
+      <div class="subhead"><h1>设置</h1><button class="quiet back">返回</button></div>
+      <form id="settings-form">
+        <div class="settings-group">
+          <label class="switch-row">窗口置顶<input id="pin" type="checkbox" role="switch"></label>
+          <label class="switch-row">开机启动<input id="startup" type="checkbox" role="switch"></label>
+          <label class="switch-row">拖至屏幕边缘时收起<input id="snap" type="checkbox" role="switch"></label>
+          <div class="image-setting">
+            <img id="edge-preview" alt="侧边栏形象预览">
+            <span>侧边栏形象</span><button id="choose-edge" type="button" class="quiet">更换</button>
+            <button id="reset-edge" type="button" class="quiet">还原</button>
+          </div>
+        </div>
+        <h2>AI 连接</h2>
+        <fieldset class="settings-group fields">
+          <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>
+          <label>模型<input id="model" placeholder="服务方提供的模型 ID" maxlength="150"></label>
+          <label>API 密钥<input id="api-key" type="password" autocomplete="off" maxlength="1000"></label>
+          <button id="clear-key" class="quiet" type="button">清除已存密钥</button>
+          <label>本地 HTTP 代理端口<input id="proxy" inputmode="numeric" placeholder="留空直连" maxlength="5"></label>
+        </fieldset>
+      </form>
+      <div class="subfoot"><span id="settings-status" role="status"></span><button type="submit" form="settings-form" class="primary">保存设置</button></div>
+    </section>
+    <section id="ai-view" class="view sub-view" hidden>
+      <div class="subhead"><h1>问便签 AI</h1><button class="quiet back">返回</button></div>
+      <form id="ai-form">
+        <label>读取范围<select id="scope"><option value="current">当前日期</option><option value="history">含历史便签</option></select></label>
+        <p>发送时会把所选范围内的便签文字提交给你配置的 API。</p>
+        <label for="prompt">你的问题</label>
+        <textarea id="prompt" maxlength="2000" placeholder="例如，还有哪些事情没做？" required></textarea>
+        <button id="send-question" type="submit" class="primary">发送</button>
+        <div id="answer" class="answer" role="status" hidden></div>
+      </form>
+    </section>
+  </main>
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

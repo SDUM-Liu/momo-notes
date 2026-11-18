@@ -1,0 +1,20 @@
+appId: io.github.sdumliu.momo-notes
+productName: Momo Notes
+directories:
+  output: release
+files:
+  - desktop/**
+  - dist/**
+  - build/icon.png
+  - LICENSE
+  - THIRD-PARTY-NOTICES.txt
+  - '!node_modules{,/**}'
+win:
+  icon: build/icon.png
+  artifactName: Momo-Notes-${version}-Setup-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: 桃桃便签
+  deleteAppDataOnUninstall: false
