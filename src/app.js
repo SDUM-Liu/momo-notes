@@ -24,6 +24,7 @@ const noteDate = day => new Date(day + 'T12:00:00')
 let state, currentDate, today, editor
 let edgeDraft = ''
 let clearKey = false
+let updateState
 let view = 'note'
 let saveQueue = Promise.resolve()
 let pageRequest = 0
@@ -55,6 +56,7 @@ function drawState(value) {
   const wasMode = state?.mode
   state = value
   today = state.today
+  drawUpdate(state.update)
   document.body.dataset.mode = state.mode
   document.body.dataset.edge = state.edge ?? ''
   $('panel').hidden = state.mode !== 'note'
@@ -266,6 +268,56 @@ function renderEdgePreview() {
   $('reset-edge').disabled = !edgeDraft
 }
 
+function drawUpdate(update) {
+  updateState = update
+  const { status, target, progress } = update
+  const messages = {
+    idle: '',
+    unavailable: '在线更新适用于 Windows 安装版',
+    checking: '正在检查更新…',
+    current: '已是最新版本',
+    available: '可更新至 v' + target,
+    downloading: progress === undefined ? '正在准备下载…' : '正在下载 · ' + progress + '%',
+    ready: 'v' + target + ' 已下载',
+    installing: '正在退出并安装…',
+    'check-error': '检查失败，请确认可访问 GitHub',
+    'download-error': '下载失败，请重试',
+    'install-error': '无法启动安装，请重试',
+  }
+  const actionLabels = {
+    available: '下载更新', downloading: '下载中', ready: '安装并重启',
+    installing: '安装中', 'download-error': '重新下载', 'install-error': '重试安装',
+  }
+  $('app-version').textContent = '当前版本 v' + update.version
+  $('update-status').textContent = messages[status]
+  $('update-status').classList.toggle('error', status.endsWith('-error'))
+  $('settings').toggleAttribute('data-update', ['available', 'ready', 'downloading', 'download-error', 'install-error'].includes(status))
+  $('update-action').textContent = actionLabels[status] ?? '检查更新'
+  $('update-action').disabled = ['unavailable', 'checking', 'downloading', 'installing'].includes(status)
+  $('update-progress').hidden = status !== 'downloading'
+  if (progress === undefined) $('update-progress').removeAttribute('value')
+  else $('update-progress').value = progress
+}
+
+$('update-action').onclick = async () => {
+  const { status } = updateState
+  $('update-action').disabled = true
+  try {
+    if (['ready', 'install-error'].includes(status)) {
+      await saveBeforeSwitch()
+      await api.installUpdate()
+    } else if (['available', 'download-error'].includes(status)) {
+      await api.downloadUpdate()
+    } else {
+      await api.checkUpdate()
+    }
+  } catch (error) {
+    $('update-status').textContent = errorMessage(error)
+    $('update-status').classList.add('error')
+    $('update-action').disabled = false
+  }
+}
+
 $('settings').onclick = () => {
   if (view === 'settings') return showView('note')
   const settings = state.settings
@@ -385,6 +437,7 @@ async function init() {
     onSelectionUpdate: () => { if (editor) drawProgress() },
   })
   api.onState(drawState)
+  api.onUpdate(drawUpdate)
   api.onDay(next => {
     followNewDay ||= currentDate === today
     today = next

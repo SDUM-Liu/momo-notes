@@ -64,6 +64,15 @@
             <button id="reset-edge" type="button" class="quiet">还原</button>
           </div>
         </div>
+        <h2>应用更新</h2>
+        <div class="settings-group update-box">
+          <div>
+            <strong id="app-version"></strong>
+            <div id="update-status" role="status"></div>
+          </div>
+          <button id="update-action" type="button" class="quiet">检查更新</button>
+          <progress id="update-progress" max="100" aria-label="更新下载进度" hidden></progress>
+        </div>
         <h2>AI 连接</h2>
         <fieldset class="settings-group fields">
           <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>

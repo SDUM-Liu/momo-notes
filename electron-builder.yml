@@ -8,7 +8,11 @@ files:
   - build/icon.png
   - LICENSE
   - THIRD-PARTY-NOTICES.txt
-  - '!node_modules{,/**}'
+publish:
+  provider: github
+  owner: SDUM-Liu
+  repo: momo-notes
+  releaseType: release
 win:
   icon: build/icon.png
   artifactName: Momo-Notes-${version}-Setup-${arch}.${ext}

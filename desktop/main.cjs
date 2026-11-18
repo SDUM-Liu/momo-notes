@@ -4,12 +4,13 @@ const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
 const { fit, position, center, nearestEdge } = require('./window.cjs')
 const { answer, endpoint } = require('./ai.cjs')
+const { createUpdates } = require('./updates.cjs')
 
 app.setName('Momo Notes')
 app.setAppUserModelId('io.github.sdumliu.momo-notes')
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
-let win, tray, store, drag, anchor, edge, today, dayTimer
+let win, tray, store, drag, anchor, edge, today, dayTimer, updates
 let mode = 'pet'
 let quitting = false
 let asking = false
@@ -20,7 +21,7 @@ const publicSettings = () => {
   const { key, ...settings } = store.data.settings
   return { ...settings, openAtLogin: app.getLoginItemSettings(loginOptions()).openAtLogin, hasKey: Boolean(key) }
 }
-const state = () => ({ mode, edge, today, settings: publicSettings() })
+const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state })
 
 function syncState() {
   win.webContents.send('app:state-changed', state())
@@ -59,6 +60,9 @@ function registerIPC() {
 
   handle('app:state', state)
   handle('window:toggle', toggle)
+  handle('updates:check', updates.check)
+  handle('updates:download', updates.download)
+  handle('updates:install', updates.install)
   on('window:drag-start', () => {
     drag = { start: screen.getCursorScreenPoint(), bounds: win.getBounds(), moved: false }
   })
@@ -189,6 +193,9 @@ function start() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  updates = createUpdates(value => {
+    if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
+  })
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
   win.on('close', event => {
@@ -213,6 +220,7 @@ function start() {
   }
   dayTimer = setInterval(refreshDay, 5000)
   powerMonitor.on('resume', refreshDay)
+  updates.schedule()
 }
 
 if (app.requestSingleInstanceLock()) {
@@ -224,6 +232,7 @@ if (app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true
     clearInterval(dayTimer)
+    updates?.stop()
   })
 } else {
   app.quit()

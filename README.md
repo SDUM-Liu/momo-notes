@@ -8,6 +8,12 @@
 
 在 [GitHub Releases](https://github.com/SDUM-Liu/momo-notes/releases) 下载 Windows x64 安装程序。初始版本的安装包没有代码签名。
 
+## 在线更新
+
+从 v0.1.1 开始，安装版启动后会检查 GitHub Releases，有新版时设置图标会显示提示点。也可以在「设置 → 应用更新」点击「检查更新」。依次点击「下载更新」和「安装并重启」完成升级。升级沿用原有的便签和设置。
+
+正在使用 v0.1.0 时，需手动下载并运行新版安装包一次。
+
 ## 使用
 
 - 启动后显示桌宠。点桌宠或任务栏托盘中的桃桃图标打开便签。便签面板约占当前显示器工作区的八分之一，小屏幕会优先保留编辑空间。
@@ -33,7 +39,7 @@ npm ci
 npm start
 ```
 
-运行 `npm run dist` 生成 x64 安装程序，输出在 `release/`。源码采用 MIT 许可证。
+运行 `npm run dist` 生成 x64 安装程序，输出在 `release/`。发布正式版时，将安装程序、同名 `.exe.blockmap` 和 `latest.yml` 一起上传到对应的 GitHub Release，再公开该 Release。源码采用 MIT 许可证。
 
 ## 角色素材
 
