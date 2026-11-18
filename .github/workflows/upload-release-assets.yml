@@ -50,7 +50,10 @@ jobs:
       - name: Verify update hashes and attach packages
         run: |
           win="artifacts/Windows-x64/Momo-Notes-$VERSION-Setup-x64.exe"
-          linux="artifacts/Ubuntu-x64/Momo-Notes-$VERSION-linux-x64.AppImage"
+          linux_manifest="artifacts/Ubuntu-x64/latest-linux.yml"
+          linux_name="$(awk '/^path:/{print $2; exit}' "$linux_manifest")"
+          [[ "$linux_name" =~ ^Momo-Notes-[0-9.]+-linux-[a-zA-Z0-9_]+\.AppImage$ ]]
+          linux="artifacts/Ubuntu-x64/$linux_name"
           verify() {
             local file="$1" manifest="$2" expected actual
             expected="$(awk '/^[[:space:]]*sha512:/{print $2; exit}' "$manifest")"
@@ -60,12 +63,12 @@ jobs:
             [[ -n "$expected" && "$expected" == "$actual" ]]
           }
           verify "$win" artifacts/Windows-x64/latest.yml
-          verify "$linux" artifacts/Ubuntu-x64/latest-linux.yml
+          verify "$linux" "$linux_manifest"
           cp artifacts/Android-debug/app-debug.apk "Momo-Notes-$VERSION-Android-debug.apk"
           cp artifacts/iOS-simulator/Momo-Notes-iOS-Simulator.zip "Momo-Notes-$VERSION-iOS-Simulator.zip"
           gh release upload "v$VERSION" --clobber \
             "$win" "$win.blockmap" artifacts/Windows-x64/latest.yml \
-            "$linux" artifacts/Ubuntu-x64/latest-linux.yml \
+            "$linux" "$linux_manifest" \
             "artifacts/macOS-arm64/Momo-Notes-$VERSION-mac-arm64.dmg" \
             "artifacts/macOS-x64/Momo-Notes-$VERSION-mac-x64.dmg" \
             "Momo-Notes-$VERSION-Android-debug.apk" "Momo-Notes-$VERSION-iOS-Simulator.zip"
