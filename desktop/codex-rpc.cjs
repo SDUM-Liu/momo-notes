@@ -3,6 +3,7 @@ const fs = require('node:fs')
 const { spawn } = require('node:child_process')
 const { createInterface } = require('node:readline')
 const { EventEmitter } = require('node:events')
+const { version } = require('../package.json')
 
 function codexExecutable() {
   const directories = (process.env.PATH ?? '').split(path.delimiter)
@@ -91,7 +92,7 @@ function appServer({ cwd, noteMode = false, onRequest = async () => undefined, l
   child.on('error', finish)
   child.on('exit', () => finish(new Error(errorMessage)))
   const ready = request('initialize', {
-    clientInfo: { name: 'momo_notes', title: '桃桃便签', version: '0.4.0' },
+    clientInfo: { name: 'momo_notes', title: '桃桃便签', version },
     capabilities: { experimentalApi: noteMode, requestAttestation: false },
   }).then(() => write({ method: 'initialized' }))
   return { request, ready, events, close() { child.kill(); finish(new Error(errorMessage)) } }

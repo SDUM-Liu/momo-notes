@@ -74,6 +74,7 @@ function codexAction(op, data, paired = false) {
     return op === 'job' ? job : codex.interrupt(data)
   }
   if (op === 'active') return codex.active(paired)
+  if (op === 'models') return codex.models()
   if (op === 'list') return codex.list(paired)
   if (op === 'read') return codex.read(data, paired)
   if (op === 'send') return codex.send(data, paired)
@@ -124,8 +125,16 @@ function registerIPC() {
   handle('codex:settings', codex.settings)
   handle('codex:configure', values => codex.configure({ enabled: values.enabled, write: values.write }))
   handle('codex:share', codex.share)
-  handle('codex:folder', async () => {
-    const result = await dialog.showOpenDialog(win, { title: '选择 Codex 工作目录', properties: ['openDirectory'] })
+  handle('codex:folder', async action => {
+    if (action === 'reset') return codex.configure({ folder: null })
+    if (action === 'open') {
+      const error = await shell.openPath(codex.folder())
+      if (error) throw new Error(error)
+      return codex.settings()
+    }
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择 Codex 工作目录', properties: ['openDirectory'], defaultPath: codex.settings().folder,
+    })
     return result.canceled ? codex.settings() : codex.configure({ folder: result.filePaths[0] })
   })
   handle('project:open', target => {

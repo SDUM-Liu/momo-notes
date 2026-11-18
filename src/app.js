@@ -6,7 +6,7 @@ import { Image } from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { linkOrNull, webUrl } from '../shared/links.mjs'
 import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
-import { followCodex, wireCodex } from './codex-view.js'
+import { followCodex, wireCodex, wireModelPicker } from './codex-view.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
@@ -674,7 +674,17 @@ $('settings-form').onsubmit = async event => {
   }
 }
 
-$('question').onclick = () => showView(view === 'ai' ? 'note' : 'ai')
+const noteModel = wireModelPicker(api, $('ai-codex-model'), $('ai-codex-model-status'), errorMessage)
+function refreshNoteModels() {
+  const codex = $('ai-provider').value === 'codex'
+  $('ai-codex-options').hidden = !codex
+  if (codex) void noteModel.load()
+}
+$('question').onclick = () => {
+  showView(view === 'ai' ? 'note' : 'ai')
+  if (view === 'ai') refreshNoteModels()
+}
+$('ai-provider').onchange = refreshNoteModels
 const questionRequest = () => ({
   question: $('prompt').value.trim(), scope: $('scope').value, date: currentDate,
   category, categoryScope: $('category-scope').value,
@@ -703,7 +713,7 @@ $('ai-form').onsubmit = async event => {
     await saveBeforeSwitch()
     if ($('ai-provider').value === 'api') answer.textContent = await api.ask(questionRequest())
     else {
-      const started = await api.codex('notes', questionRequest())
+      const started = await api.codex('notes', { ...questionRequest(), model: noteModel.value() })
       const completed = await followCodex(api, started, job => {
         noteJob = job
         $('ai-cancel').hidden = !job.turnId || job.status !== 'running'

@@ -14,9 +14,40 @@ export async function followCodex(api, job, draw) {
   return job
 }
 
+export function wireModelPicker(api, select, status, errorMessage) {
+  const label = select.options[0].text
+  const key = 'momo.model.' + select.id
+  let preferred = ''
+  let loading
+  try { preferred = localStorage.getItem(key) || '' } catch {}
+  select.onchange = () => {
+    preferred = select.value
+    try { localStorage.setItem(key, preferred) } catch {}
+  }
+  function load() {
+    if (!loading) {
+      status.hidden = true
+      loading = api.codex('models').then(models => {
+        select.replaceChildren(new Option(label, ''), ...models.map(item => new Option(item.label, item.id)))
+        if (models.some(item => item.id === preferred)) select.value = preferred
+        else if (preferred) {
+          status.textContent = '上次选择的模型目前不可用，已选用默认项。'
+          status.hidden = false
+        }
+      }).catch(error => {
+        status.textContent = '模型列表加载失败，可使用当前选项。' + errorMessage(error)
+        status.hidden = false
+      }).finally(() => { loading = undefined })
+    }
+    return loading
+  }
+  return { load, value: () => select.value }
+}
+
 export function wireCodex(api, showView, errorMessage) {
   const $ = id => document.getElementById(id)
   const select = $('codex-thread')
+  const model = wireModelPicker(api, $('codex-model'), $('codex-model-status'), errorMessage)
   let config, threads = [], cursor, history = [], currentJob
   let watching = false
   let request = 0
@@ -27,7 +58,8 @@ export function wireCodex(api, showView, errorMessage) {
 
   function drawConfig(value) {
     config = value
-    $('codex-folder-label').textContent = value.folder || '尚未选择工作目录'
+    $('codex-folder-label').textContent = (value.defaultFolder ? '默认工作目录 · ' : '') + value.folder
+    $('codex-folder-reset').hidden = value.defaultFolder
     $('codex-remote').checked = value.enabled
     $('codex-write').checked = value.write
   }
@@ -89,7 +121,7 @@ export function wireCodex(api, showView, errorMessage) {
 
   async function refresh() {
     $('codex-status').textContent = ''
-    await load()
+    await Promise.all([load(), model.load()])
     if (!watching) await observe(() => api.codex('active'))
   }
 
@@ -97,19 +129,23 @@ export function wireCodex(api, showView, errorMessage) {
     showView('codex')
     void action(async () => {
       if (!api.mobile) drawConfig(await api.codexSettings())
-      if (api.mobile || config.folder) await refresh()
+      await refresh()
     })
   }
   $('codex-back').onclick = () => showView('settings')
   if (!api.mobile) {
-    $('codex-folder').onclick = () => action(async () => {
-      const before = config?.folder
-      drawConfig(await api.codexFolder())
-      if (config.folder && before !== config.folder) {
-        $('codex-status').textContent = ''
-        await load('')
-      }
-    })
+    for (const [button, operation] of [
+      ['codex-folder', 'choose'], ['codex-folder-reset', 'reset'], ['codex-folder-open', 'open'],
+    ]) {
+      $(button).onclick = () => action(async () => {
+        const before = config?.folder
+        drawConfig(await api.codexFolder(operation))
+        if (before !== config.folder) {
+          $('codex-status').textContent = ''
+          await load('')
+        }
+      })
+    }
     for (const field of ['codex-remote', 'codex-write']) {
       $(field).onchange = () => action(async () => {
         try {
@@ -153,7 +189,9 @@ export function wireCodex(api, showView, errorMessage) {
     if (watching) return
     void action(() => {
       $('codex-status').textContent = '正在连接主机…'
-      return observe(() => api.codex('send', { id: select.value || null, prompt: $('codex-prompt').value }))
+      return observe(() => api.codex('send', {
+        id: select.value || null, prompt: $('codex-prompt').value, model: model.value(),
+      }))
     })
   }
 }
