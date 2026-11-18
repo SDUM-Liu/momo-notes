@@ -2,7 +2,7 @@ import { App } from '@capacitor/app'
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core'
 import { InAppBrowser, DefaultWebViewOptions, ToolbarPosition } from '@capacitor/inappbrowser'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
-import { defaultSettings, defaultCategory, builtInCategories, datesFor, hasContent, newCategory, newDayNote, noteKey, localDay } from '../shared/notes.mjs'
+import { defaultSettings, defaultCategory, builtInCategories, datesFor, hasContent, newCategory, newDayNote, noteKey, nodeText, localDay } from '../shared/notes.mjs'
 import { chatMessages, endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
 import { webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
@@ -39,6 +39,7 @@ export function createMobileBridge() {
   const ready = openDatabase()
   const notes = Object.create(null)
   const records = Object.create(null)
+  let localDrafts = {}
   let categories = [...builtInCategories]
   let writes = Promise.resolve()
   let mode = 'pet'
@@ -47,9 +48,10 @@ export function createMobileBridge() {
   let hasKey = false
   let browser = { url: '', loading: false, canGoBack: false, error: '' }
   let onState = noop, onDay = noop, onBrowser = noop, onNotes = noop, onSync = noop
+  let lastWidget = ''
   const publicSettings = () => ({ ...settings, hasKey })
   const state = () => ({
-    mode, today, settings: publicSettings(), browser, categories,
+    mode, today, settings: publicSettings(), browser, categories, locked: sync.state().locked,
     update: { status: 'mobile', version: __APP_VERSION__ },
   })
 
@@ -57,6 +59,30 @@ export function createMobileBridge() {
     const result = writes.then(operation)
     writes = result.catch(noop)
     return result
+  }
+
+  function updateWidget() {
+    if (!native || !today) return
+    const pending = []
+    function collect(node) {
+      if (node.type === 'taskItem' && !node.attrs?.checked && hasContent(node.content?.[0] ?? {})) {
+        pending.push(nodeText(node.content[0]).trim())
+      }
+      node.content?.forEach(collect)
+    }
+    collect(notes[noteKey(defaultCategory, today)] || newDayNote(notes, defaultCategory, today))
+    const data = { date: today, count: pending.length, preview: pending.slice(0, 2).map(text => text.slice(0, 80)).join(' · ') }
+    const snapshot = JSON.stringify(data)
+    if (snapshot === lastWidget) return
+    lastWidget = snapshot
+    void syncTransport.updateWidget(data).catch(() => { if (lastWidget === snapshot) lastWidget = '' })
+  }
+
+  function openWidget(url) {
+    if (!/^momonotes:\/\/today\/?$/.test(url ?? '')) return
+    mode = 'note'
+    onState(state())
+    onNotes({ openToday: true })
   }
 
   async function writeRecord(key, record) {
@@ -70,12 +96,20 @@ export function createMobileBridge() {
     return queueWrite(async () => {
       const previous = records[key]
       const rev = previous?.dirty || base === undefined ? (previous?.rev ?? null) : base
+      if (sync.state().enabled) {
+        const saved = await sync.edit({ key, doc, base: rev })
+        await writeRecord(key, { doc: saved.doc, rev: saved.rev, dirty: false })
+        updateWidget()
+        return saved
+      }
       await writeRecord(key, { doc, rev, dirty: true })
+      updateWidget()
       return { key, doc, rev }
     })
   }
 
   async function ensurePage(category, date) {
+    if (sync.state().enabled) return
     const key = noteKey(category, date)
     if (!records[key]) await queueWrite(async () => {
       if (!records[key]) await writeRecord(key, { doc: newDayNote(notes, category, date), rev: null, dirty: false })
@@ -98,6 +132,7 @@ export function createMobileBridge() {
     await ensurePage(defaultCategory, date)
     const previous = today
     today = date
+    updateWidget()
     if (previous && previous !== date) onDay(date)
   }
 
@@ -112,6 +147,10 @@ export function createMobileBridge() {
     records,
     categories: () => categories,
     setCategories: mergeCategories,
+    async keepDraft(key, doc) {
+      localDrafts = { ...localDrafts, [key]: doc }
+      await transaction(await ready, 'settings', true, store => store.put(localDrafts, 'drafts'))
+    },
     markForUpload(remote) {
       return queueWrite(async () => {
         for (const [key, record] of Object.entries(records)) {
@@ -132,10 +171,14 @@ export function createMobileBridge() {
           return
         }
         await writeRecord(key, { doc: value.doc, rev: value.rev, dirty: false })
+        updateWidget()
         onNotes(value)
       })
     },
-    change: value => onSync(value),
+    change: value => {
+      onSync(value)
+      onNotes({ locked: value.locked })
+    },
   })
   const backgroundSync = () => sync.run().catch(noop)
   const init = ready.then(async db => {
@@ -145,21 +188,29 @@ export function createMobileBridge() {
     }
     settings = { ...settings, ...await transaction(db, 'settings', false, store => store.get('user')) }
     categories = await transaction(db, 'settings', false, store => store.get('categories')) ?? categories
+    localDrafts = await transaction(db, 'settings', false, store => store.get('drafts')) ?? {}
     await sync.init()
     if (native) {
       hasKey = Boolean(await SecureStorage.getItem(keyName).catch(() => null))
       await App.addListener('appStateChange', ({ isActive }) => {
         if (isActive) { void runRefresh(); void backgroundSync() }
       })
+      await App.addListener('appUrlOpen', ({ url }) => openWidget(url))
       await InAppBrowser.addListener('browserClosed', () => {
         browser = { ...browser, loading: false, closed: true }
         onBrowser(browser)
       })
     }
     await refreshDay()
+    if (native) {
+      const launch = await App.getLaunchUrl().catch(() => null)
+      if (/^momonotes:\/\/today\/?$/.test(launch?.url ?? '')) mode = 'note'
+    }
     setInterval(runRefresh, 5000)
     void backgroundSync()
     setInterval(backgroundSync, 20000)
+    setInterval(() => { void sync.probe() }, 2500)
+    updateWidget()
   })
 
   return {
@@ -174,6 +225,7 @@ export function createMobileBridge() {
     pairSync: sync.pairWith,
     unpairSync: sync.unpair,
     runSync: sync.run,
+    syncDrafts: () => localDrafts,
     onUpdate: noop,
     browserViewport: noop,
     browserBack: noop,
@@ -191,7 +243,8 @@ export function createMobileBridge() {
       return datesFor(notes, category, today)
     },
     async addCategory(name) {
-      await mergeCategories([newCategory(name)])
+      const item = newCategory(name)
+      await mergeCategories(sync.state().enabled ? await sync.addCategory(item) : [item])
       return categories
     },
     async openNote(date, category = defaultCategory) {
@@ -199,8 +252,8 @@ export function createMobileBridge() {
       const day = date || today
       if (!date) await ensurePage(category, day)
       const key = noteKey(category, day)
-      if (!notes[key]) throw new Error('日期页不存在')
-      return { date: day, category, doc: notes[key], today, rev: records[key].rev }
+      if (!notes[key] && date && day !== today) throw new Error('日期页不存在')
+      return { date: day, category, doc: notes[key] || newDayNote(notes, category, day), today, rev: records[key]?.rev ?? null }
     },
     saveNote,
     async saveSettings({ newKey, baseUrl, model, proxyPort }) {

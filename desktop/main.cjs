@@ -8,7 +8,7 @@ const { createUpdates } = require('./updates.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort, chatMessages } = require('../shared/ai.mjs')
-const { defaultCategory, noteKey, newCategory } = require('../shared/notes.mjs')
+const { defaultCategory, noteKey, newCategory, datesFor, newDayNote } = require('../shared/notes.mjs')
 const { createSync } = require('./sync.cjs')
 
 app.setName('Momo Notes')
@@ -27,7 +27,7 @@ const publicSettings = () => {
   return { ...settings, openAtLogin: opensAtLogin(), hasKey: Boolean(key) }
 }
 const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state,
-  browser: browser.state, categories: store.data.categories })
+  browser: browser.state, categories: store.data.categories, locked: sync.state().locked })
 
 function syncState() {
   win.webContents.send('app:state-changed', state())
@@ -49,6 +49,7 @@ function toggle() {
 }
 
 function refreshDay() {
+  if (sync?.state().locked) return
   const next = store.today()
   if (next === today) return
   today = next
@@ -143,22 +144,27 @@ function registerIPC() {
   })
   handle('notes:dates', (category = defaultCategory) => {
     refreshDay()
+    if (sync.state().locked) return datesFor(store.data.notes, category, today)
     return store.dates(category)
   })
-  handle('notes:category', name => store.addCategory(newCategory(name)))
+  handle('notes:category', name => {
+    sync.requireWritable()
+    return store.addCategory(newCategory(name))
+  })
   handle('notes:open', (date, category = defaultCategory) => {
     refreshDay()
-    const day = date || store.today(category)
+    const day = date || (sync.state().locked ? today : store.today(category))
     const key = noteKey(category, day)
-    const doc = store.data.notes[key]
+    const doc = store.data.notes[key] || (!date && sync.state().locked ? newDayNote(store.data.notes, category, day) : null)
     if (!doc) throw new Error('日期页不存在')
     return { date: day, category, doc, today, rev: store.data.revisions[key] }
   })
   handle('notes:save', (date, doc, category = defaultCategory, base) => {
+    sync.requireWritable()
     const key = noteKey(category, date)
     return base === undefined
       ? { rev: store.saveNote(date, doc, category), doc, key }
-      : sync.write({ key, doc, base }, false)
+      : sync.write({ key, doc, base })
   })
   handle('settings:edge-image', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog(win, {

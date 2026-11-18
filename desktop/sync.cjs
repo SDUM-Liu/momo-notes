@@ -4,7 +4,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const { randomBytes } = require('node:crypto')
 const { seal, unseal, syncPort, wireLimit, pairingCode } = require('../shared/sync.mjs')
-const { noteIdentity, validateCategory, hasContent } = require('../shared/notes.mjs')
+const { noteIdentity, noteKey, localDay, validateCategory, hasContent } = require('../shared/notes.mjs')
 const { revisionOf } = require('./data.cjs')
 
 function createSync(directory, store, ask, notify) {
@@ -12,7 +12,23 @@ function createSync(directory, store, ask, notify) {
   const config = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {}
   const replay = new Map()
   const sockets = new Set()
-  let server, starting
+  let server, starting, lease, leaseTimer
+
+  function unlock() {
+    if (!lease) return
+    clearTimeout(leaseTimer)
+    lease = undefined
+    notify({ locked: false })
+  }
+
+  function renew() {
+    clearTimeout(leaseTimer)
+    leaseTimer = setTimeout(unlock, 25000)
+  }
+
+  function requireWritable() {
+    if (lease) throw Object.assign(new Error('同步中，便签暂时只读'), { code: 'SYNC_BUSY' })
+  }
 
   function persist() {
     fs.writeFileSync(filename + '.tmp', JSON.stringify(config), { mode: 0o600 })
@@ -25,7 +41,7 @@ function createSync(directory, store, ask, notify) {
   }
 
   function state() {
-    return { role: 'host', enabled: Boolean(server?.listening), addresses: addresses(), port: syncPort }
+    return { role: 'host', enabled: Boolean(server?.listening), addresses: addresses(), port: syncPort, locked: Boolean(lease) }
   }
 
   function put({ key, doc, base }, remote = true) {
@@ -34,34 +50,59 @@ function createSync(directory, store, ask, notify) {
     const current = store.data.notes[key]
     const revision = store.data.revisions[key] || null
     if (revision === revisionOf(doc)) return { key, doc: current, rev: revision }
-    let result = doc
     if (current && revision !== base && hasContent(current)) {
-      const heading = { type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: '同步冲突副本' }] }
-      const extra = [heading, ...doc.content]
-      const tail = current.content.slice(-extra.length)
-      if (JSON.stringify(tail) === JSON.stringify(extra)) return { key, doc: current, rev: revision }
-      result = { type: 'doc', content: [...current.content, ...extra] }
+      throw Object.assign(new Error('主机已有更新，当前修改暂未保存。请先复制草稿，再重新打开便签。'), { code: 'NOTE_STALE' })
     }
-    const rev = store.saveNote(date, result, category)
-    if (remote) notify({ key, doc: result, rev })
-    return { key, doc: result, rev }
+    const rev = store.saveNote(date, doc, category)
+    if (remote) notify({ key, doc, rev })
+    return { key, doc, rev }
   }
 
-  async function processRequest({ op, payload }) {
-    if (op === 'index') {
+  async function processRequest({ op, payload, token }) {
+    if (op === 'state') return { locked: Boolean(lease) }
+    if (op === 'index') return { categories: store.data.categories, revisions: store.data.revisions, locked: Boolean(lease) }
+    if (op === 'edit' || op === 'category') {
+      requireWritable()
+      if (op === 'edit') return put(payload)
+      const categories = store.addCategory(validateCategory(payload))
+      notify({ categories })
+      return categories
+    }
+    if (op === 'ask') return ask(payload)
+    if (op === 'begin') {
+      requireWritable()
       if (!Array.isArray(payload) || payload.length > 500) throw new Error('分类数量超出同步限制')
+      const categories = payload.map(validateCategory)
+      lease = randomBytes(24).toString('hex')
+      renew()
+      notify({ locked: true })
       const previous = store.data.categories
-      for (const item of payload) store.addCategory(validateCategory(item))
-      for (const item of store.data.categories) store.today(item.id)
-      if (previous !== store.data.categories) notify({ categories: store.data.categories })
-      return { categories: store.data.categories, revisions: store.data.revisions }
+      try {
+        for (const item of categories) store.addCategory(item)
+        if (previous !== store.data.categories) notify({ categories: store.data.categories })
+        return { token: lease, categories: store.data.categories, revisions: store.data.revisions }
+      } catch (error) {
+        unlock()
+        throw error
+      }
+    }
+    if (!lease || token !== lease) throw Object.assign(new Error('同步锁已失效，请重试'), { code: 'SYNC_BUSY' })
+    renew()
+    if (op === 'finish') { unlock(); return null }
+    if (op === 'materialize') {
+      for (const item of store.data.categories) {
+        const key = noteKey(item.id, localDay())
+        const existed = store.data.notes[key]
+        store.today(item.id)
+        if (!existed) notify({ key, doc: store.data.notes[key], rev: store.data.revisions[key] })
+      }
+      return store.data.revisions
     }
     if (op === 'get') {
       noteIdentity(payload)
       return { key: payload, doc: store.data.notes[payload] ?? null, rev: store.data.revisions[payload] ?? null }
     }
     if (op === 'put') return put(payload)
-    if (op === 'ask') return ask(payload)
     throw new Error('未知的同步请求')
   }
 
@@ -97,7 +138,7 @@ function createSync(directory, store, ask, notify) {
       try {
         response = { ok: true, value: await processRequest(request) }
       } catch (error) {
-        response = { ok: false, error: error.message }
+        response = { ok: false, error: error.message, code: error.code }
       }
       const message = seal(config.key, 'reply/' + request.id, response)
       if (message.length > wireLimit) {
@@ -138,6 +179,7 @@ function createSync(directory, store, ask, notify) {
     server?.close()
     server = null
     for (const socket of sockets) socket.destroy()
+    unlock()
   }
 
   async function setEnabled(enabled) {
@@ -151,7 +193,11 @@ function createSync(directory, store, ask, notify) {
 
   return {
     state,
-    write: put,
+    requireWritable,
+    write(payload) {
+      requireWritable()
+      return put(payload, false)
+    },
     setEnabled,
     restore: () => config.enabled ? enable() : Promise.resolve(state()),
     stop,
@@ -163,6 +209,7 @@ function createSync(directory, store, ask, notify) {
       config.key = randomBytes(32).toString('hex')
       persist()
       for (const socket of sockets) socket.destroy()
+      unlock()
       return state()
     },
   }

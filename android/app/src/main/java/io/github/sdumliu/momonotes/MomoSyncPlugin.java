@@ -16,6 +16,13 @@ public class MomoSyncPlugin extends Plugin {
     private static final int LIMIT = 32 * 1024 * 1024;
 
     @PluginMethod
+    public void updateWidget(PluginCall call) {
+        TodayWidget.save(getContext(), call.getString("date", ""), call.getInt("count", 0),
+            call.getString("preview", ""));
+        call.resolve();
+    }
+
+    @PluginMethod
     public void exchange(PluginCall call) {
         String host = call.getString("host", "");
         String message = call.getString("message", "");

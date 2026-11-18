@@ -1,60 +1,133 @@
 import { parsePairing, seal, unseal, wireLimit } from '../shared/sync.mjs'
 
-export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, markForUpload, change }) {
-  let pair, running, last = '', error = ''
-  const state = () => ({ role: 'mobile', enabled: Boolean(pair), host: pair?.host, last, error })
-  async function request(connection, op, payload) {
+export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, markForUpload, keepDraft, change }) {
+  let pair, running, probing, peerLocked = true, last = '', error = ''
+  const state = () => ({ role: 'mobile', enabled: Boolean(pair), host: pair?.host, last, error,
+    locked: Boolean(pair && (running || peerLocked)) })
+  async function request(connection, op, payload, token) {
     const bytes = crypto.getRandomValues(new Uint8Array(12))
     const id = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
-    const message = seal(connection.key, 'request', { id, time: Date.now(), op, payload })
+    const message = seal(connection.key, 'request', { id, time: Date.now(), op, payload, token })
     if (message.length > wireLimit) throw new Error('便签超出单页同步上限')
     const reply = await exchange({ host: connection.host, message })
     const response = unseal(connection.key, 'reply/' + id, reply.message)
-    if (!response.ok) throw new Error(response.error)
+    if (!response.ok) throw Object.assign(new Error(response.error), { code: response.code })
     return response.value
   }
 
-  const index = connection => request(connection, 'index', categories().filter(item => item.id.startsWith('cat-')))
+  const index = connection => request(connection, 'index')
+
+  async function probe() {
+    const connection = pair
+    if (!connection || running) return
+    if (probing) return probing
+    probing = (async () => {
+      try {
+        const result = await request(connection, 'state')
+        if (connection !== pair || running) return
+        peerLocked = result.locked
+        if (!peerLocked) error = ''
+      } catch (failure) {
+        if (connection !== pair || running) return
+        peerLocked = true
+        error = failure.message
+      } finally {
+        probing = null
+        change(state())
+      }
+    })()
+    return probing
+  }
 
   async function run() {
     if (!pair) return state()
     if (running) return running
     const connection = pair
+    const snapshot = await index(connection).catch(failure => {
+      if (connection === pair) {
+        peerLocked = true
+        error = failure.message
+        change(state())
+      }
+      throw failure
+    })
+    if (connection !== pair) return state()
+    if (running) return running
+    peerLocked = snapshot.locked
+    if (peerLocked) {
+      change(state())
+      return state()
+    }
+    const known = new Set(snapshot.categories.map(item => item.id))
+    const extra = categories().filter(item => !known.has(item.id))
+    const dirty = Object.values(records).some(record => record.dirty)
+    const outdated = Object.entries(snapshot.revisions).some(([key, rev]) => records[key]?.rev !== rev)
+    if (!extra.length && !dirty && !outdated) {
+      last = new Date().toISOString()
+      error = ''
+      change(state())
+      return state()
+    }
     running = (async () => {
+      let token
       try {
-        const response = await index(connection)
+        const response = await request(connection, 'begin', extra)
+        token = response.token
         await setCategories(response.categories)
-        const remote = response.revisions
         for (const [key, record] of Object.entries(records)) {
           if (!record.dirty) continue
-          const updated = await request(connection, 'put', { key, doc: record.doc, base: record.rev })
-          await accept(key, record, updated, true)
-          remote[key] = updated.rev
+          try {
+            const updated = await request(connection, 'put', { key, doc: record.doc, base: record.rev }, token)
+            await accept(key, record, updated, true)
+          } catch (failure) {
+            if (failure.code !== 'NOTE_STALE') throw failure
+            await keepDraft(key, record.doc)
+            const updated = await request(connection, 'get', key, token)
+            await accept(key, record, updated, false)
+          }
         }
+        const remote = await request(connection, 'materialize', undefined, token)
         // Pull recent pages first so today's view refreshes quickly.
         for (const [key, rev] of Object.entries(remote).sort(([a], [b]) => b.slice(-10).localeCompare(a.slice(-10)))) {
           const current = records[key]
           if (current?.dirty || current?.rev === rev) continue
-          const updated = await request(connection, 'get', key)
+          const updated = await request(connection, 'get', key, token)
           if (updated.doc) await accept(key, current, updated, false)
         }
         last = new Date().toISOString()
         error = ''
-        return state()
       } catch (failure) {
         error = failure.message
         throw failure
       } finally {
+        if (token) await request(connection, 'finish', undefined, token).catch(() => {})
         running = null
-        change(state())
+        await probe()
       }
+      return state()
     })()
+    change(state())
     return running
   }
 
   return {
     state,
     run,
+    probe,
+    async edit(payload) {
+      if (state().locked) throw new Error('同步中或主机未连接，当前修改暂未保存')
+      try {
+        return await request(pair, 'edit', payload)
+      } catch (failure) {
+        if (failure.code === 'NOTE_STALE') await keepDraft(payload.key, payload.doc)
+        else await probe()
+        throw failure
+      }
+    },
+    async addCategory(item) {
+      if (state().locked) throw new Error('同步中或主机未连接，分类暂不可修改')
+      return request(pair, 'category', item)
+    },
     async init() {
       const code = await loadCode()
       if (code) {
@@ -68,6 +141,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       if (pair?.key !== next.key) await markForUpload(remote.revisions)
       await saveCode(String(code).trim())
       pair = next
+      peerLocked = remote.locked
       change(state())
       return run()
     },
@@ -75,6 +149,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       if (running) await running.catch(() => {})
       await saveCode('')
       pair = undefined
+      peerLocked = true
       last = error = ''
       change(state())
       return state()

@@ -5,7 +5,7 @@ import { TableKit } from '@tiptap/extension-table'
 import { Image } from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { linkOrNull, webUrl } from '../shared/links.mjs'
-import { defaultCategory, noteKey } from '../shared/notes.mjs'
+import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
@@ -38,6 +38,8 @@ let category = defaultCategory
 const revisions = new Map()
 const visited = new Map()
 let editGeneration = 0
+let readOnly = false
+let retryOnUnlock = false
 
 function errorMessage(error) {
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -80,6 +82,7 @@ function drawState(value) {
   drawUpdate(state.update)
   drawBrowser(state.browser)
   drawCategories(value.categories)
+  setReadOnly(value.locked)
   document.body.dataset.mode = state.mode
   document.body.dataset.edge = state.edge ?? ''
   $('panel').hidden = state.mode !== 'note'
@@ -101,6 +104,26 @@ function mascotLabel() {
 function drawCategories(values) {
   $('categories').replaceChildren(...values.map(({ id, name }) => new Option(name, id)))
   $('categories').value = category
+}
+
+function setReadOnly(value) {
+  const wasLocked = readOnly
+  readOnly = Boolean(value)
+  if (wasLocked === readOnly) return
+  editor?.setEditable(!readOnly, false)
+  $('note-locked').hidden = !readOnly
+  for (const button of document.querySelectorAll('#new-category, #category-form button[type=submit], .toolbar button')) {
+    button.disabled = readOnly
+  }
+  if (readOnly) {
+    $('category-form').hidden = true
+    $('link-form').hidden = true
+    $('table-menu').hidden = true
+  }
+  if (wasLocked && !readOnly && retryOnUnlock && currentDate) {
+    retryOnUnlock = false
+    saveDocument(editor.getJSON())
+  }
 }
 
 function drawDate() {
@@ -132,7 +155,7 @@ function saveDocument(doc) {
   const key = noteKey(selected, date)
   const generation = ++editGeneration
   noteStatus('保存中…')
-  saveQueue = saveQueue.then(() => api.saveNote(date, doc, selected, revisions.get(key))).then(saved => {
+  saveQueue = saveQueue.then(() => api.saveNote(date, doc, selected, revisions.get(key) ?? null)).then(saved => {
     const merged = JSON.stringify(saved.doc) !== JSON.stringify(doc)
     previousSaveError = false
     const active = date === currentDate && selected === category && generation === editGeneration
@@ -145,7 +168,10 @@ function saveDocument(doc) {
     noteStatus('已保存')
   }).catch(error => {
     previousSaveError = true
-    noteStatus(errorMessage(error), true)
+    const message = errorMessage(error)
+    retryOnUnlock = /同步中|主机未连接/.test(message)
+    $('reload-shared-note').hidden = !message.includes('主机已有更新')
+    noteStatus(message, true)
   })
 }
 
@@ -225,6 +251,21 @@ wireDrag($('mascot'), () => {
 })
 wireDrag($('title-drag'))
 $('return-today').onclick = () => loadNote()
+$('reload-shared-note').onclick = async () => {
+  const page = await api.openNote(currentDate, category).catch(error => {
+    noteStatus(errorMessage(error), true)
+    return null
+  })
+  if (!page) return
+  $('saved-editor-draft').value = nodeText(editor.getJSON(), true)
+  $('saved-editor-draft').hidden = false
+  $('reload-shared-note').hidden = true
+  revisions.set(noteKey(category, currentDate), page.rev)
+  previousSaveError = false
+  editor.commands.setContent(page.doc, { emitUpdate: false })
+  drawProgress()
+  noteStatus('已加载主机内容，原稿可在下方复制。')
+}
 for (const back of document.querySelectorAll('.back')) back.onclick = () => showView('note')
 $('categories').onchange = () => {
   const selected = $('categories').value
@@ -384,6 +425,7 @@ function fileData(file) {
 }
 
 async function insertImages(files, position) {
+  if (readOnly) return
   const date = currentDate
   const selected = category
   for (const file of files) {
@@ -391,7 +433,7 @@ async function insertImages(files, position) {
       if (!/^image\/(png|jpeg|webp|gif|bmp)$/.test(file.type)) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片')
       if (file.size > 8 * 1024 * 1024) throw new Error('请选择 8 MB 以内的图片')
       const src = await fileData(file)
-      if (date !== currentDate || selected !== category) return
+      if (readOnly || date !== currentDate || selected !== category) return
       const image = { type: 'image', attrs: { src, alt: file.name } }
       if (position !== undefined) editor.chain().focus().insertContentAt(position, image).run()
       else editor.chain().focus().setImage(image.attrs).run()
@@ -500,7 +542,7 @@ function drawSync(value) {
   if (mobile) {
     $('sync-now').hidden = !value.enabled
     $('sync-unpair').hidden = !value.enabled
-    $('sync-status').textContent = value.error || (value.enabled
+    $('sync-status').textContent = value.error || (value.locked ? '设备同步中，便签只读' : value.enabled
       ? '主机 ' + value.host + (value.last ? ' · ' + new Date(value.last).toLocaleTimeString() : ' · 等待首次同步')
       : '从桌面主机获取配对码或二维码。')
     return
@@ -554,6 +596,11 @@ $('sync-code').onclick = event => event.currentTarget.select()
 $('sync-rotate').onclick = () => syncAction(() => api.rotateSync(), $('sync-rotate'))
 $('sync-now').onclick = () => syncAction(() => api.runSync(), $('sync-now'))
 $('sync-unpair').onclick = () => syncAction(() => api.unpairSync(), $('sync-unpair'))
+$('sync-drafts').onclick = async () => {
+  const drafts = await api.syncDrafts()
+  $('sync-draft-text').value = Object.entries(drafts).map(([key, doc]) => key + '\n' + nodeText(doc, true)).join('\n\n') || '没有待整理的草稿'
+  $('sync-draft-text').hidden = false
+}
 $('sync-mobile').onsubmit = event => {
   event.preventDefault()
   void syncAction(async () => {
@@ -716,6 +763,15 @@ async function init() {
   api.onBrowser(drawBrowser)
   api.onNotes(async change => {
     if (!state) return
+    if (change.openToday) {
+      void loadNote(undefined, defaultCategory)
+      return
+    }
+    if (typeof change.locked === 'boolean') {
+      state.locked = change.locked
+      setReadOnly(change.locked)
+      return
+    }
     if (change.categories) {
       state.categories = change.categories
       drawCategories(state.categories)
@@ -727,7 +783,7 @@ async function init() {
     if (editor.view.composing) return
     await saveQueue
     const page = await api.openNote(currentDate, category).catch(() => null)
-    if (!page || generation !== editGeneration || request !== pageRequest || editor.view.composing) return
+    if (!page || previousSaveError || generation !== editGeneration || request !== pageRequest || editor.view.composing) return
     revisions.set(change.key, page.rev)
     if (JSON.stringify(editor.getJSON()) !== JSON.stringify(page.doc)) {
       editor.commands.setContent(page.doc, { emitUpdate: false })

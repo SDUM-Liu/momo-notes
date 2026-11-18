@@ -1,6 +1,7 @@
 import Capacitor
 import Foundation
 import Network
+import WidgetKit
 
 class MomoViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
@@ -69,8 +70,21 @@ public final class MomoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "MomoSyncPlugin"
     public let jsName = "MomoSync"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "exchange", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "exchange", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "updateWidget", returnType: CAPPluginReturnPromise)
     ]
+
+    @objc func updateWidget(_ call: CAPPluginCall) {
+        guard let settings = UserDefaults(suiteName: "group.io.github.sdumliu.momonotes") else {
+            call.reject("小组件共享容器不可用")
+            return
+        }
+        settings.set(call.getString("date"), forKey: "widgetDate")
+        settings.set(call.getInt("count") ?? 0, forKey: "widgetCount")
+        settings.set(call.getString("preview"), forKey: "widgetPreview")
+        WidgetCenter.shared.reloadTimelines(ofKind: "MomoToday")
+        call.resolve()
+    }
 
     @objc func exchange(_ call: CAPPluginCall) {
         guard let host = call.getString("host"), let address = IPv4Address(host),
