@@ -1,9 +1,11 @@
 import Capacitor
 import Foundation
+import Network
 
 class MomoViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(MomoProxyPlugin())
+        bridge?.registerPluginInstance(MomoSyncPlugin())
     }
 }
 
@@ -59,5 +61,80 @@ public final class MomoProxyPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             call.resolve(["status": response.statusCode, "body": String(decoding: data, as: UTF8.self)])
         }.resume()
+    }
+}
+
+@objc(MomoSyncPlugin)
+public final class MomoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "MomoSyncPlugin"
+    public let jsName = "MomoSync"
+    public let pluginMethods = [CAPPluginMethod(name: "exchange", returnType: CAPPluginReturnPromise)]
+
+    @objc func exchange(_ call: CAPPluginCall) {
+        guard let host = call.getString("host"), let address = IPv4Address(host),
+              let message = call.getString("message"), !message.contains("\n"),
+              message.utf8.count <= SyncExchange.limit else {
+            call.reject("同步请求无效")
+            return
+        }
+        SyncExchange(address: address, message: message, call: call).start()
+    }
+}
+
+private final class SyncExchange {
+    static let limit = 32 * 1024 * 1024
+    private let queue = DispatchQueue(label: "momo.sync")
+    private let connection: NWConnection
+    private let call: CAPPluginCall
+    private let message: Data
+    private var response = Data()
+    private var finished = false
+
+    init(address: IPv4Address, message: String, call: CAPPluginCall) {
+        connection = NWConnection(host: .ipv4(address), port: 38425, using: .tcp)
+        self.call = call
+        self.message = Data((message + "\n").utf8)
+    }
+
+    func start() {
+        connection.stateUpdateHandler = { [self] state in
+            switch state {
+            case .ready:
+                connection.send(content: message, completion: .contentProcessed { [self] error in
+                    if error != nil { finish(nil) } else { receive() }
+                })
+            case .failed, .cancelled:
+                finish(nil)
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 65) { [weak self] in self?.finish(nil) }
+        queue.asyncAfter(deadline: .now() + 6) { [weak self] in
+            if let self = self, self.connection.state != .ready { self.finish(nil) }
+        }
+    }
+
+    private func receive() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [self] data, _, complete, error in
+            if finished { return }
+            if let data = data {
+                let end = data.firstIndex(of: 10)
+                response.append(contentsOf: data.prefix(upTo: end ?? data.endIndex))
+                if response.count > Self.limit { finish(nil); return }
+                if end != nil { finish(String(data: response, encoding: .ascii)); return }
+            }
+            if complete || error != nil { finish(nil) } else { receive() }
+        }
+    }
+
+    private func finish(_ result: String?) {
+        if finished { return }
+        finished = true
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        if let result = result { call.resolve(["message": result]) }
+        else { call.reject("主机未响应，请检查配对码和本地网络权限") }
     }
 }

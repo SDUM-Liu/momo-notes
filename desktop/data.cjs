@@ -1,7 +1,10 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const { createHash } = require('node:crypto')
 
-const { defaultSettings, localDay, emptyNote, nodeText, hasContent } = require('../shared/notes.mjs')
+const { defaultSettings, localDay, emptyNote, nodeText, builtInCategories, defaultCategory, noteKey,
+  noteIdentity, datesFor, newDayNote, validateCategory } = require('../shared/notes.mjs')
+const revisionOf = doc => createHash('sha256').update(JSON.stringify(doc)).digest('hex')
 
 function writeJson(filename, value) {
   fs.writeFileSync(filename + '.tmp', JSON.stringify(value), { encoding: 'utf8', mode: 0o600 })
@@ -15,35 +18,53 @@ function openStore(directory) {
   const saved = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {}
   const notes = Object.fromEntries(
     fs.readdirSync(noteDirectory)
-      .filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name))
+      .filter(name => /^(?:(?:finds|stories|thoughts|cat-[a-f0-9]{32})__)?\d{4}-\d{2}-\d{2}\.json$/.test(name))
       .map(name => [name.slice(0, -5), JSON.parse(fs.readFileSync(path.join(noteDirectory, name), 'utf8'))]),
   )
-  const data = { notes, settings: { ...defaultSettings, ...saved.settings }, position: saved.position ?? null }
+  const revisions = Object.fromEntries(Object.entries(notes).map(([key, doc]) => [key, revisionOf(doc)]))
+  const data = {
+    notes, revisions, settings: { ...defaultSettings, ...saved.settings }, position: saved.position ?? null,
+    categories: [...builtInCategories, ...(saved.categories ?? [])],
+  }
 
   function update(patch) {
-    const next = { settings: data.settings, position: data.position, ...patch }
-    writeJson(filename, next)
+    const next = { settings: data.settings, position: data.position, categories: data.categories, ...patch }
+    writeJson(filename, { ...next, categories: next.categories.filter(item => item.id.startsWith('cat-')) })
     Object.assign(data, next)
   }
 
-  function today() {
+  function today(category = defaultCategory) {
+    requireCategory(category)
     const date = localDay()
-    if (!data.notes[date]) saveNote(date, emptyNote())
+    if (!data.notes[noteKey(category, date)]) saveNote(date, newDayNote(notes, category, date), category)
     return date
   }
 
-  function saveNote(date, doc) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || doc?.type !== 'doc') throw new Error('便签数据格式有误')
-    writeJson(path.join(noteDirectory, date + '.json'), doc)
-    data.notes[date] = doc
+  function requireCategory(category) {
+    if (!data.categories.some(item => item.id === category)) throw new Error('便签分类不存在')
   }
 
-  function dates() {
-    const current = today()
-    return Object.keys(data.notes).filter(date => date === current || hasContent(data.notes[date])).sort().reverse()
+  function saveNote(date, doc, category = defaultCategory) {
+    requireCategory(category)
+    const key = noteKey(category, date)
+    noteIdentity(key)
+    if (doc?.type !== 'doc' || !Array.isArray(doc.content)) throw new Error('便签数据格式有误')
+    const revision = revisionOf(doc)
+    if (revision !== revisions[key]) {
+      writeJson(path.join(noteDirectory, key + '.json'), doc)
+      notes[key] = doc
+      revisions[key] = revision
+    }
+    return revision
   }
 
-  return { get data() { return data }, update, today, saveNote, dates }
+  function addCategory(value) {
+    const item = validateCategory(value)
+    if (!data.categories.some(existing => existing.id === item.id)) update({ categories: [...data.categories, item] })
+    return data.categories
+  }
+
+  return { data, update, today, saveNote, addCategory, dates: (category = defaultCategory) => datesFor(notes, category, today(category)) }
 }
 
-module.exports = { emptyNote, localDay, nodeText, openStore }
+module.exports = { emptyNote, localDay, nodeText, openStore, revisionOf }

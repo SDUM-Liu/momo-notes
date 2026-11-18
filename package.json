@@ -1,6 +1,6 @@
 {
   "name": "momo-notes",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A desktop and mobile companion for daily notes and checklists",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -17,6 +17,7 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
     "electron-updater": "^6.8.11"
   },
   "devDependencies": {
@@ -36,7 +37,9 @@
     "@tiptap/starter-kit": "^3.34.0",
     "electron": "^45.3.4",
     "electron-builder": "^26.18.0",
+    "jsqr": "^1.4.0",
     "lucide-static": "^1.75.0",
+    "qrcode": "^1.5.4",
     "vite": "^8.3.8"
   },
   "repository": {

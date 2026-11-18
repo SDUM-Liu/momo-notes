@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeImage, safeStorage, powerMonitor, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeImage, safeStorage, powerMonitor, shell, clipboard } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
@@ -7,14 +7,16 @@ const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
-const { validateProxyPort } = require('../shared/ai.mjs')
+const { validateProxyPort, chatMessages } = require('../shared/ai.mjs')
+const { defaultCategory, noteKey, newCategory } = require('../shared/notes.mjs')
+const { createSync } = require('./sync.cjs')
 
 app.setName('Momo Notes')
 if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-notes')
 if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('ozone-platform', 'x11')
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
-let win, tray, store, drag, anchor, edge, today, dayTimer, updates, browser
+let win, tray, store, drag, anchor, edge, today, dayTimer, updates, browser, sync
 let mode = 'pet'
 let quitting = false
 let asking = false
@@ -24,7 +26,8 @@ const publicSettings = () => {
   const { key, ...settings } = store.data.settings
   return { ...settings, openAtLogin: opensAtLogin(), hasKey: Boolean(key) }
 }
-const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state, browser: browser.state })
+const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state,
+  browser: browser.state, categories: store.data.categories })
 
 function syncState() {
   win.webContents.send('app:state-changed', state())
@@ -52,6 +55,16 @@ function refreshDay() {
   win.webContents.send('notes:day-changed', next)
 }
 
+async function ask(request) {
+  if (asking) throw new Error('上一条提问仍在处理')
+  asking = true
+  try {
+    return await answer(store.data, request)
+  } finally {
+    asking = false
+  }
+}
+
 function registerIPC() {
   const fromApp = event => event.sender === win.webContents && event.senderFrame === win.webContents.mainFrame
   const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
@@ -73,6 +86,21 @@ function registerIPC() {
   })
   handle('browser:hide', browser.hide)
   handle('browser:back', browser.back)
+  handle('sync:state', sync.state)
+  handle('sync:enable', sync.setEnabled)
+  handle('sync:code', sync.code)
+  handle('sync:rotate', sync.rotate)
+  handle('project:open', target => {
+    const url = {
+      repo: 'https://github.com/SDUM-Liu/momo-notes',
+      issues: 'https://github.com/SDUM-Liu/momo-notes/issues',
+      chat: 'https://chatgpt.com/',
+    }[target]
+    if (typeof url === 'string') return shell.openExternal(url)
+  })
+  handle('ai:copy-chat', request => {
+    clipboard.writeText(chatMessages(store.data.notes, request).map(message => message.content).join('\n\n'))
+  })
   on('window:drag-start', () => {
     drag = { start: screen.getCursorScreenPoint(), bounds: win.getBounds(), moved: false }
   })
@@ -113,18 +141,25 @@ function registerIPC() {
       dialog.showErrorBox('桃桃便签', '窗口位置无法保存，请检查本地存储。')
     }
   })
-  handle('notes:dates', () => {
+  handle('notes:dates', (category = defaultCategory) => {
     refreshDay()
-    return store.dates()
+    return store.dates(category)
   })
-  handle('notes:open', date => {
+  handle('notes:category', name => store.addCategory(newCategory(name)))
+  handle('notes:open', (date, category = defaultCategory) => {
     refreshDay()
-    const day = date || today
-    const doc = store.data.notes[day]
+    const day = date || store.today(category)
+    const key = noteKey(category, day)
+    const doc = store.data.notes[key]
     if (!doc) throw new Error('日期页不存在')
-    return { date: day, doc, today }
+    return { date: day, category, doc, today, rev: store.data.revisions[key] }
   })
-  handle('notes:save', (date, doc) => store.saveNote(date, doc))
+  handle('notes:save', (date, doc, category = defaultCategory, base) => {
+    const key = noteKey(category, date)
+    return base === undefined
+      ? { rev: store.saveNote(date, doc, category), doc, key }
+      : sync.write({ key, doc, base }, false)
+  })
   handle('settings:edge-image', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog(win, {
       title: '选择侧边栏形象', properties: ['openFile'],
@@ -165,15 +200,7 @@ function registerIPC() {
     syncState()
     return publicSettings()
   })
-  handle('ai:ask', async request => {
-    if (asking) throw new Error('上一条提问仍在处理')
-    asking = true
-    try {
-      return await answer(store.data, request)
-    } finally {
-      asking = false
-    }
-  })
+  handle('ai:ask', ask)
 }
 
 function start() {
@@ -211,6 +238,10 @@ function start() {
   browser = createBrowser(win, value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
   })
+  sync = createSync(app.getPath('userData'), store, ask, change => {
+    if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
+  })
+  void sync.restore().catch(error => console.error('Sync startup failed:', error.message))
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
   win.on('close', event => {
@@ -249,6 +280,7 @@ if (app.requestSingleInstanceLock()) {
     quitting = true
     clearInterval(dayTimer)
     updates?.stop()
+    sync?.stop()
   })
 } else {
   app.quit()

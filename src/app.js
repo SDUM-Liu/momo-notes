@@ -5,6 +5,7 @@ import { TableKit } from '@tiptap/extension-table'
 import { Image } from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { linkOrNull, webUrl } from '../shared/links.mjs'
+import { defaultCategory, noteKey } from '../shared/notes.mjs'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
@@ -33,9 +34,13 @@ let saveQueue = Promise.resolve()
 let pageRequest = 0
 let previousSaveError = false
 let followNewDay = false
+let category = defaultCategory
+const revisions = new Map()
+const visited = new Map()
+let editGeneration = 0
 
 function errorMessage(error) {
-  return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+  return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
 }
 
 function noteStatus(message, error = false) {
@@ -45,8 +50,15 @@ function noteStatus(message, error = false) {
 
 function showView(next) {
   if (view === 'browser' && next !== 'browser') void api.hideBrowser()
+  if (view === 'sync' && next !== 'sync') {
+    ++qrRequest
+    $('sync-qr').hidden = true
+    $('sync-qr').removeAttribute('src')
+    $('sync-code').value = ''
+    $('sync-pair-code').value = ''
+  }
   view = next
-  for (const name of ['note', 'history', 'settings', 'ai', 'browser']) {
+  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync']) {
     $(name + '-view').hidden = name !== next
   }
   $('history').classList.toggle('active', next === 'history')
@@ -55,6 +67,8 @@ function showView(next) {
   $('question').classList.toggle('active', next === 'ai')
   $('table-menu').hidden = true
   $('link-form').hidden = true
+  $('category-form').hidden = true
+  mascotLabel()
   if (next === 'browser') sendBrowserViewport()
   if (next === 'note' && followNewDay && !editor.view.composing) void loadNote()
 }
@@ -65,18 +79,28 @@ function drawState(value) {
   today = state.today
   drawUpdate(state.update)
   drawBrowser(state.browser)
+  drawCategories(value.categories)
   document.body.dataset.mode = state.mode
   document.body.dataset.edge = state.edge ?? ''
   $('panel').hidden = state.mode !== 'note'
   $('mascot-image').src = state.mode === 'note' ? perch : state.mode === 'edge' ? state.settings.edgeImage || defaultEdge : pet
   $('mascot-image').classList.toggle('custom', Boolean(state.settings.edgeImage))
-  const label = state.mode === 'note' ? '收起便签' : '打开便签'
-  $('mascot').setAttribute('aria-label', label)
-  $('mascot').title = label + (state.mode === 'note' ? '' : ' · 可拖动')
+  mascotLabel()
   if (wasMode !== 'note' && state.mode === 'note') {
     showView('note')
     if (!editor || !currentDate) void loadNote()
   }
+}
+
+function mascotLabel() {
+  const label = state?.mode !== 'note' ? '打开便签' : view === 'browser' ? '返回便签' : '收起便签'
+  $('mascot').setAttribute('aria-label', label)
+  $('mascot').title = label
+}
+
+function drawCategories(values) {
+  $('categories').replaceChildren(...values.map(({ id, name }) => new Option(name, id)))
+  $('categories').value = category
 }
 
 function drawDate() {
@@ -104,10 +128,21 @@ function drawProgress() {
 
 function saveDocument(doc) {
   const date = currentDate
+  const selected = category
+  const key = noteKey(selected, date)
+  const generation = ++editGeneration
   noteStatus('保存中…')
-  saveQueue = saveQueue.then(() => api.saveNote(date, doc)).then(() => {
+  saveQueue = saveQueue.then(() => api.saveNote(date, doc, selected, revisions.get(key))).then(saved => {
+    const merged = JSON.stringify(saved.doc) !== JSON.stringify(doc)
     previousSaveError = false
-    if (date === currentDate) noteStatus('已保存')
+    const active = date === currentDate && selected === category && generation === editGeneration
+    if (!merged || (active && !editor.view.composing)) revisions.set(key, saved.rev)
+    if (!active) return
+    if (merged && !editor.view.composing) {
+      editor.commands.setContent(saved.doc, { emitUpdate: false })
+      drawProgress()
+    }
+    noteStatus('已保存')
   }).catch(error => {
     previousSaveError = true
     noteStatus(errorMessage(error), true)
@@ -123,16 +158,20 @@ async function saveBeforeSwitch() {
   if (previousSaveError) throw new Error('请先解决当前便签的保存错误')
 }
 
-async function loadNote(date) {
+async function loadNote(date, selected = category) {
   followNewDay = false
   const request = ++pageRequest
   try {
     await saveBeforeSwitch()
-    const page = await api.openNote(date)
+    const page = await api.openNote(date, selected)
     if (request !== pageRequest) return
-    if (currentDate !== page.date) editor.commands.setContent(page.doc, { emitUpdate: false })
+    if (currentDate !== page.date || category !== page.category) editor.commands.setContent(page.doc, { emitUpdate: false })
+    category = page.category
+    $('categories').value = category
     currentDate = page.date
     today = page.today
+    revisions.set(noteKey(category, currentDate), page.rev)
+    visited.set(category, currentDate === today ? null : currentDate)
     drawDate()
     drawProgress()
     noteStatus('已保存')
@@ -140,6 +179,7 @@ async function loadNote(date) {
   } catch (error) {
     if (request !== pageRequest) return
     noteStatus(errorMessage(error), true)
+    $('categories').value = category
     showView('note')
   }
 }
@@ -179,10 +219,34 @@ function wireDrag(element, click) {
   }
 }
 
-wireDrag($('mascot'), () => api.toggle())
+wireDrag($('mascot'), () => {
+  if (state.mode === 'note' && view === 'browser') showView('note')
+  else void api.toggle()
+})
 wireDrag($('title-drag'))
 $('return-today').onclick = () => loadNote()
 for (const back of document.querySelectorAll('.back')) back.onclick = () => showView('note')
+$('categories').onchange = () => {
+  const selected = $('categories').value
+  void loadNote(visited.get(selected), selected)
+}
+$('new-category').onclick = () => {
+  $('category-form').hidden = false
+  $('category-name').focus()
+}
+$('category-cancel').onclick = () => { $('category-form').hidden = true }
+$('category-form').onsubmit = async event => {
+  event.preventDefault()
+  try {
+    await saveBeforeSwitch()
+    state.categories = await api.addCategory($('category-name').value)
+    $('category-name').value = ''
+    drawCategories(state.categories)
+    await loadNote(undefined, state.categories.at(-1).id)
+  } catch (error) {
+    noteStatus(errorMessage(error), true)
+  }
+}
 
 function sendBrowserViewport() {
   if (view !== 'browser' || state?.mode !== 'note') return
@@ -219,7 +283,6 @@ $('browser').onclick = () => {
   showView(next)
   if (next === 'browser' && !browserState?.url) $('browser-url').focus()
 }
-$('back-note').onclick = () => showView('note')
 $('browser-back').onclick = () => api.browserBack()
 $('browser-bar').onsubmit = event => {
   event.preventDefault()
@@ -260,7 +323,7 @@ $('history').onclick = async () => {
   list.textContent = '正在读取…'
   try {
     await saveBeforeSwitch()
-    const dates = await api.listDates()
+    const dates = await api.listDates(category)
     list.replaceChildren()
     for (const date of dates) {
       const button = document.createElement('button')
@@ -322,12 +385,13 @@ function fileData(file) {
 
 async function insertImages(files, position) {
   const date = currentDate
+  const selected = category
   for (const file of files) {
     try {
       if (!/^image\/(png|jpeg|webp|gif|bmp)$/.test(file.type)) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片')
       if (file.size > 8 * 1024 * 1024) throw new Error('请选择 8 MB 以内的图片')
       const src = await fileData(file)
-      if (date !== currentDate) return
+      if (date !== currentDate || selected !== category) return
       const image = { type: 'image', attrs: { src, alt: file.name } }
       if (position !== undefined) editor.chain().focus().insertContentAt(position, image).run()
       else editor.chain().focus().setImage(image.attrs).run()
@@ -422,6 +486,105 @@ $('settings').onclick = () => {
   renderEdgePreview()
   $('settings-status').textContent = ''
   showView('settings')
+  void Promise.resolve(api.syncState()).then(drawSync).catch(() => {})
+}
+
+let syncState, qrRequest = 0
+function drawSync(value) {
+  syncState = value
+  const mobile = value.role === 'mobile'
+  $('sync-host').hidden = mobile
+  $('sync-mobile').hidden = !mobile
+  $('api-settings').hidden = mobile && value.enabled
+  $('mobile-ai-host').hidden = !mobile || !value.enabled
+  if (mobile) {
+    $('sync-now').hidden = !value.enabled
+    $('sync-unpair').hidden = !value.enabled
+    $('sync-status').textContent = value.error || (value.enabled
+      ? '主机 ' + value.host + (value.last ? ' · ' + new Date(value.last).toLocaleTimeString() : ' · 等待首次同步')
+      : '从桌面主机获取配对码或二维码。')
+    return
+  }
+  $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
+  $('sync-host-details').hidden = !value.enabled
+  $('sync-status').textContent = value.enabled ? (value.addresses.length ? '主机正在运行' : '主机正在运行，等待可用网络地址') : '将这台电脑设为便签和 AI 的主机。'
+  const previous = $('sync-address').value
+  $('sync-address').replaceChildren(...value.addresses.map(address => new Option(address, address)))
+  if (value.addresses.includes(previous)) $('sync-address').value = previous
+}
+
+async function showPairing() {
+  const request = ++qrRequest
+  const address = $('sync-address').value
+  $('sync-qr').hidden = true
+  $('sync-qr').removeAttribute('src')
+  $('sync-code').value = ''
+  if (view !== 'sync' || !address || !syncState?.enabled) return
+  const code = await api.syncCode(address)
+  if (view !== 'sync' || request !== qrRequest) return
+  $('sync-code').value = code
+  const qr = await import('qrcode')
+  const png = await (qr.default ?? qr).toDataURL(code, { width: 256, margin: 3 })
+  if (view !== 'sync' || request !== qrRequest) return
+  $('sync-qr').src = png
+  $('sync-qr').hidden = false
+}
+
+async function syncAction(operation, button) {
+  if (button) button.disabled = true
+  try {
+    const value = await operation()
+    if (value) drawSync(value)
+    if (!api.mobile) await showPairing()
+  } catch (error) {
+    $('sync-status').textContent = errorMessage(error)
+  } finally {
+    if (button) button.disabled = false
+  }
+}
+
+$('settings-sync').onclick = () => {
+  showView('sync')
+  void syncAction(() => api.syncState())
+}
+$('sync-back').onclick = () => showView('settings')
+$('sync-enable').onclick = () => syncAction(() => api.enableSync(!syncState.enabled), $('sync-enable'))
+$('sync-address').onchange = () => syncAction(() => showPairing())
+$('sync-code').onclick = event => event.currentTarget.select()
+$('sync-rotate').onclick = () => syncAction(() => api.rotateSync(), $('sync-rotate'))
+$('sync-now').onclick = () => syncAction(() => api.runSync(), $('sync-now'))
+$('sync-unpair').onclick = () => syncAction(() => api.unpairSync(), $('sync-unpair'))
+$('sync-mobile').onsubmit = event => {
+  event.preventDefault()
+  void syncAction(async () => {
+    const result = await api.pairSync($('sync-pair-code').value)
+    $('sync-pair-code').value = ''
+    return result
+  }, $('sync-pair'))
+}
+$('sync-photo').onchange = async event => {
+  const [file] = event.target.files
+  event.target.value = ''
+  if (!file) return
+  try {
+    if (file.size > 20 * 1024 * 1024) throw new Error('请选择 20 MB 以内的二维码图片')
+    const image = new Image()
+    image.src = await fileData(file)
+    await image.decode()
+    const factor = Math.min(1, 1600 / Math.max(image.width, image.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(image.width * factor)
+    canvas.height = Math.round(image.height * factor)
+    const context = canvas.getContext('2d')
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height)
+    const { default: scan } = await import('jsqr')
+    const result = scan(pixels.data, pixels.width, pixels.height)
+    if (!result) throw new Error('未识别到二维码，请让二维码充满画面或粘贴配对码')
+    $('sync-pair-code').value = result.data
+  } catch (error) {
+    $('sync-status').textContent = errorMessage(error)
+  }
 }
 
 $('choose-edge').onclick = async () => {
@@ -464,6 +627,23 @@ $('settings-form').onsubmit = async event => {
 }
 
 $('question').onclick = () => showView(view === 'ai' ? 'note' : 'ai')
+const questionRequest = () => ({ question: $('prompt').value.trim(), scope: $('scope').value, date: currentDate, category })
+$('copy-chat').onclick = async () => {
+  const answer = $('answer')
+  answer.hidden = false
+  try {
+    await saveBeforeSwitch()
+    const manual = await api.copyChat(questionRequest())
+    $('chat-text').hidden = !manual
+    $('chat-text').value = manual || ''
+    answer.textContent = manual ? '请选择上方文字，复制后粘贴到 ChatGPT。' : '已复制。请粘贴到已打开的 ChatGPT 聊天并发送。'
+  } catch (error) {
+    answer.textContent = errorMessage(error)
+  }
+}
+for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'issues'], ['open-chat', 'chat']]) {
+  $(button).onclick = () => api.openProject(target).catch(error => noteStatus(errorMessage(error), true))
+}
 $('ai-form').onsubmit = async event => {
   event.preventDefault()
   const question = $('prompt').value.trim()
@@ -476,7 +656,7 @@ $('ai-form').onsubmit = async event => {
   answer.textContent = '正在读取便签并生成回答…'
   try {
     await saveBeforeSwitch()
-    answer.textContent = await api.ask({ question, scope: $('scope').value, date: currentDate })
+    answer.textContent = await api.ask(questionRequest())
   } catch (error) {
     answer.classList.add('error')
     answer.textContent = errorMessage(error)
@@ -534,6 +714,27 @@ async function init() {
   api.onState(drawState)
   api.onUpdate(drawUpdate)
   api.onBrowser(drawBrowser)
+  api.onNotes(async change => {
+    if (!state) return
+    if (change.categories) {
+      state.categories = change.categories
+      drawCategories(state.categories)
+      return
+    }
+    if (!currentDate || change.key !== noteKey(category, currentDate)) return
+    const generation = editGeneration
+    const request = pageRequest
+    if (editor.view.composing) return
+    await saveQueue
+    const page = await api.openNote(currentDate, category).catch(() => null)
+    if (!page || generation !== editGeneration || request !== pageRequest || editor.view.composing) return
+    revisions.set(change.key, page.rev)
+    if (JSON.stringify(editor.getJSON()) !== JSON.stringify(page.doc)) {
+      editor.commands.setContent(page.doc, { emitUpdate: false })
+      drawProgress()
+    }
+  })
+  api.onSync?.(drawSync)
   api.onDay(next => {
     followNewDay ||= currentDate === today
     today = next

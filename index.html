@@ -22,6 +22,14 @@
       </nav>
     </header>
     <section id="note-view" class="view">
+      <div class="category-bar" aria-label="便签分类">
+        <label class="category-picker">分类<select id="categories" aria-label="便签分类"></select></label>
+        <button id="new-category" type="button" class="quiet" aria-label="新建分类" title="新建分类">＋</button>
+      </div>
+      <form id="category-form" class="category-bar" hidden>
+        <input id="category-name" placeholder="输入分类名称" aria-label="分类名称" maxlength="24" required>
+        <button type="submit" class="primary">创建</button><button id="category-cancel" type="button" class="quiet">取消</button>
+      </form>
       <div class="date-line">
         <div><div id="date-caption" class="date-caption"></div><h1 id="note-date"></h1></div>
         <button id="return-today" class="quiet" hidden>回到今天</button>
@@ -58,7 +66,6 @@
     </section>
     <section id="browser-view" class="view" hidden>
       <form id="browser-bar">
-        <button id="back-note" type="button" class="quiet">返回便签</button>
         <button id="browser-back" type="button" class="quiet" aria-label="网页后退" title="网页后退">‹</button>
         <input id="browser-url" type="url" inputmode="url" aria-label="网址" placeholder="https://…" required>
         <button class="quiet" type="submit">打开</button>
@@ -75,6 +82,11 @@
     <section id="settings-view" class="view sub-view" hidden>
       <div class="subhead"><h1>设置</h1><button class="quiet back">返回</button></div>
       <form id="settings-form">
+        <div class="project-links">
+          <button id="settings-sync" type="button" class="quiet">设备同步</button>
+          <button id="project-repo" type="button" class="quiet">开源仓库</button>
+          <button id="project-issues" type="button" class="quiet">问题反馈</button>
+        </div>
         <div class="settings-group desktop-only">
           <label class="switch-row">窗口置顶<input id="pin" type="checkbox" role="switch"></label>
           <label class="switch-row">开机启动<input id="startup" type="checkbox" role="switch"></label>
@@ -98,7 +110,8 @@
           后台下载，退出时自动安装<input id="automatic-update" type="checkbox" role="switch">
         </label>
         <h2>AI 连接</h2>
-        <fieldset class="settings-group fields">
+        <p id="mobile-ai-host" hidden>配对后，AI API 由主机调用。</p>
+        <fieldset id="api-settings" class="settings-group fields">
           <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>
           <label>模型<input id="model" placeholder="服务方提供的模型 ID" maxlength="150"></label>
           <label>API 密钥<input id="api-key" type="password" autocomplete="off" maxlength="1000"></label>
@@ -108,14 +121,42 @@
       </form>
       <div class="subfoot"><span id="settings-status" role="status"></span><button type="submit" form="settings-form" class="primary">保存设置</button></div>
     </section>
+    <section id="sync-view" class="view sub-view" hidden>
+      <div class="subhead"><h1>设备同步</h1><button id="sync-back" class="quiet">返回设置</button></div>
+      <div class="sync-body">
+        <p id="sync-status" role="status"></p>
+        <div id="sync-host">
+          <button id="sync-enable" class="primary">开启主机同步</button>
+          <div id="sync-host-details" hidden>
+            <label>主机地址<select id="sync-address"></select></label>
+            <img id="sync-qr" alt="同步配对二维码" hidden>
+            <label>配对码<input id="sync-code" readonly></label>
+            <button id="sync-rotate" class="quiet">更换配对码</button>
+            <p>移动设备须能访问本机的 TCP 38425 端口。更换配对码后需重新配对。</p>
+          </div>
+        </div>
+        <form id="sync-mobile" hidden>
+          <label>主机配对码<input id="sync-pair-code" placeholder="粘贴配对码或识别二维码" autocomplete="off" maxlength="100" required></label>
+          <label class="quiet qr-picker">识别二维码<input id="sync-photo" type="file" accept="image/*" capture="environment"></label>
+          <button id="sync-pair" class="primary" type="submit">配对并同步</button>
+          <button id="sync-now" class="quiet" type="button" hidden>立即同步</button>
+          <button id="sync-unpair" class="quiet" type="button" hidden>取消配对</button>
+        </form>
+      </div>
+    </section>
     <section id="ai-view" class="view sub-view" hidden>
       <div class="subhead"><h1>问便签 AI</h1><button class="quiet back">返回</button></div>
       <form id="ai-form">
-        <label>读取范围<select id="scope"><option value="current">当前日期</option><option value="history">含历史便签</option></select></label>
-        <p>发送时会把所选范围内的便签文字提交给你配置的 API。</p>
+        <label>读取范围<select id="scope"><option value="current">当前分类 · 本页</option><option value="history">当前分类 · 含历史</option></select></label>
+        <p>可使用配置好的 API，或复制便签和问题后粘贴到 ChatGPT 聊天。</p>
         <label for="prompt">你的问题</label>
         <textarea id="prompt" maxlength="2000" placeholder="例如，还有哪些事情没做？" required></textarea>
         <button id="send-question" type="submit" class="primary">发送</button>
+        <div class="project-links">
+          <button id="copy-chat" type="button" class="quiet">复制到 ChatGPT</button>
+          <button id="open-chat" type="button" class="quiet">打开 ChatGPT 网页</button>
+        </div>
+        <textarea id="chat-text" aria-label="可手动复制的聊天内容" readonly hidden></textarea>
         <div id="answer" class="answer" role="status" hidden></div>
       </form>
     </section>
