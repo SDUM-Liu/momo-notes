@@ -7,7 +7,7 @@ const { seal, unseal, syncPort, wireLimit, pairingCode } = require('../shared/sy
 const { noteIdentity, noteKey, localDay, validateCategory, hasContent } = require('../shared/notes.mjs')
 const { revisionOf } = require('./data.cjs')
 
-function createSync(directory, store, ask, notify) {
+function createSync(directory, store, ask, notify, codex) {
   const filename = path.join(directory, 'sync.json')
   const config = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {}
   const replay = new Map()
@@ -69,6 +69,7 @@ function createSync(directory, store, ask, notify) {
       return categories
     }
     if (op === 'ask') return ask(payload)
+    if (typeof op === 'string' && op.startsWith('codex/') && codex) return codex(op.slice(6), payload)
     if (op === 'begin') {
       requireWritable()
       if (!Array.isArray(payload) || payload.length > 500) throw new Error('分类数量超出同步限制')

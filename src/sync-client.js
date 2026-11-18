@@ -159,5 +159,10 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       await run()
       return request(pair, 'ask', payload)
     },
+    async codex(op, payload) {
+      if (!pair) throw new Error('请先在「设备同步」配对主机')
+      if (op === 'notes') await run()
+      return request(pair, 'codex/' + op, payload)
+    },
   }
 }

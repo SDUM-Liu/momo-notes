@@ -6,6 +6,7 @@ import { Image } from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { linkOrNull, webUrl } from '../shared/links.mjs'
 import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
+import { followCodex, wireCodex } from './codex-view.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
@@ -60,7 +61,7 @@ function showView(next) {
     $('sync-pair-code').value = ''
   }
   view = next
-  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync']) {
+  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync', 'codex']) {
     $(name + '-view').hidden = name !== next
   }
   $('history').classList.toggle('active', next === 'history')
@@ -674,22 +675,19 @@ $('settings-form').onsubmit = async event => {
 }
 
 $('question').onclick = () => showView(view === 'ai' ? 'note' : 'ai')
-const questionRequest = () => ({ question: $('prompt').value.trim(), scope: $('scope').value, date: currentDate, category })
-$('copy-chat').onclick = async () => {
-  const answer = $('answer')
-  answer.hidden = false
-  try {
-    await saveBeforeSwitch()
-    const manual = await api.copyChat(questionRequest())
-    $('chat-text').hidden = !manual
-    $('chat-text').value = manual || ''
-    answer.textContent = manual ? '请选择上方文字，复制后粘贴到 ChatGPT。' : '已复制。请粘贴到已打开的 ChatGPT 聊天并发送。'
-  } catch (error) {
-    answer.textContent = errorMessage(error)
-  }
-}
-for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'issues'], ['open-chat', 'chat']]) {
+const questionRequest = () => ({
+  question: $('prompt').value.trim(), scope: $('scope').value, date: currentDate,
+  category, categoryScope: $('category-scope').value,
+})
+for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'issues']]) {
   $(button).onclick = () => api.openProject(target).catch(error => noteStatus(errorMessage(error), true))
+}
+wireCodex(api, showView, errorMessage)
+let noteJob
+$('ai-cancel').onclick = () => {
+  if (noteJob?.turnId) void api.codex('interrupt', noteJob.id).catch(error => {
+    $('answer').textContent = errorMessage(error)
+  })
 }
 $('ai-form').onsubmit = async event => {
   event.preventDefault()
@@ -703,11 +701,23 @@ $('ai-form').onsubmit = async event => {
   answer.textContent = '正在读取便签并生成回答…'
   try {
     await saveBeforeSwitch()
-    answer.textContent = await api.ask(questionRequest())
+    if ($('ai-provider').value === 'api') answer.textContent = await api.ask(questionRequest())
+    else {
+      const started = await api.codex('notes', questionRequest())
+      const completed = await followCodex(api, started, job => {
+        noteJob = job
+        $('ai-cancel').hidden = !job.turnId || job.status !== 'running'
+        const detail = job.retrying && job.status === 'running' ? '主机正在重新连接 Codex…' : ''
+        answer.textContent = job.label + '\n\n' + ([job.output, detail].filter(Boolean).join('\n\n') || '正在主机上读取便签并回答…')
+      })
+      if (completed.status === 'failed') throw new Error(completed.error)
+      if (completed.status === 'interrupted') answer.textContent += '\n\n已停止'
+    }
   } catch (error) {
     answer.classList.add('error')
     answer.textContent = errorMessage(error)
   } finally {
+    $('ai-cancel').hidden = true
     send.disabled = false
   }
 }

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeImage, safeStorage, powerMonitor, shell, clipboard } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeImage, safeStorage, powerMonitor, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
@@ -7,16 +7,17 @@ const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
-const { validateProxyPort, chatMessages } = require('../shared/ai.mjs')
+const { validateProxyPort } = require('../shared/ai.mjs')
 const { defaultCategory, noteKey, newCategory, datesFor, newDayNote } = require('../shared/notes.mjs')
 const { createSync } = require('./sync.cjs')
+const { createCodex } = require('./codex.cjs')
 
 app.setName('Momo Notes')
 if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-notes')
 if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('ozone-platform', 'x11')
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
-let win, tray, store, drag, anchor, edge, today, dayTimer, updates, browser, sync
+let win, tray, store, drag, anchor, edge, today, dayTimer, updates, browser, sync, codex
 let mode = 'pet'
 let quitting = false
 let asking = false
@@ -66,6 +67,34 @@ async function ask(request) {
   }
 }
 
+function codexAction(op, data, paired = false) {
+  if (op === 'notes') return codex.ask(data)
+  if (op === 'job' || op === 'interrupt') {
+    const job = codex.jobResult(data, paired)
+    return op === 'job' ? job : codex.interrupt(data)
+  }
+  if (op === 'active') return codex.active(paired)
+  if (op === 'list') return codex.list(paired)
+  if (op === 'read') return codex.read(data, paired)
+  if (op === 'send') return codex.send(data, paired)
+  throw new Error('未知的 Codex 请求')
+}
+
+async function approveCodex(method, request) {
+  const detail = request.networkApprovalContext?.host
+    ? '网络目的地：' + String(request.networkApprovalContext.host)
+    : method === 'item/fileChange/requestApproval'
+      ? '文件授权范围：' + (request.grantRoot || codex.settings().folder)
+      : '工作目录：' + (request.cwd || codex.settings().folder) + '\n' + (request.command || '未提供命令预览')
+  if (win.isDestroyed()) return 'decline'
+  win.show()
+  const result = await dialog.showMessageBox(win, {
+    type: 'question', title: '桃桃便签 · 主机 Codex 授权', buttons: ['拒绝', '仅允许这一次'],
+    defaultId: 0, cancelId: 0, message: 'Codex 正在请求一项额外权限', detail: detail.slice(0, 6000),
+  })
+  return result.response === 1 ? 'accept' : 'decline'
+}
+
 function registerIPC() {
   const fromApp = event => event.sender === win.webContents && event.senderFrame === win.webContents.mainFrame
   const handle = (channel, callback) => ipcMain.handle(channel, (event, ...args) => {
@@ -91,16 +120,20 @@ function registerIPC() {
   handle('sync:enable', sync.setEnabled)
   handle('sync:code', sync.code)
   handle('sync:rotate', sync.rotate)
+  handle('codex:action', (op, data) => codexAction(op, data))
+  handle('codex:settings', codex.settings)
+  handle('codex:configure', values => codex.configure({ enabled: values.enabled, write: values.write }))
+  handle('codex:share', codex.share)
+  handle('codex:folder', async () => {
+    const result = await dialog.showOpenDialog(win, { title: '选择 Codex 工作目录', properties: ['openDirectory'] })
+    return result.canceled ? codex.settings() : codex.configure({ folder: result.filePaths[0] })
+  })
   handle('project:open', target => {
     const url = {
       repo: 'https://github.com/SDUM-Liu/momo-notes',
       issues: 'https://github.com/SDUM-Liu/momo-notes/issues',
-      chat: 'https://chatgpt.com/',
     }[target]
     if (typeof url === 'string') return shell.openExternal(url)
-  })
-  handle('ai:copy-chat', request => {
-    clipboard.writeText(chatMessages(store.data.notes, request).map(message => message.content).join('\n\n'))
   })
   on('window:drag-start', () => {
     drag = { start: screen.getCursorScreenPoint(), bounds: win.getBounds(), moved: false }
@@ -244,9 +277,10 @@ function start() {
   browser = createBrowser(win, value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
   })
+  codex = createCodex(app.getPath('userData'), store, approveCodex)
   sync = createSync(app.getPath('userData'), store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
-  })
+  }, (op, payload) => codexAction(op, payload, true))
   void sync.restore().catch(error => console.error('Sync startup failed:', error.message))
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
@@ -287,6 +321,7 @@ if (app.requestSingleInstanceLock()) {
     clearInterval(dayTimer)
     updates?.stop()
     sync?.stop()
+    codex?.close()
   })
 } else {
   app.quit()

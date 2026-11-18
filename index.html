@@ -87,6 +87,7 @@
       <form id="settings-form">
         <div class="project-links">
           <button id="settings-sync" type="button" class="quiet">设备同步</button>
+          <button id="settings-codex" type="button" class="quiet">主机会话</button>
           <button id="project-repo" type="button" class="quiet">开源仓库</button>
           <button id="project-issues" type="button" class="quiet">问题反馈</button>
         </div>
@@ -149,19 +150,46 @@
         </form>
       </div>
     </section>
+    <section id="codex-view" class="view sub-view" hidden>
+      <div class="subhead"><h1>主机 Codex</h1><button id="codex-back" class="quiet">返回设置</button></div>
+      <div class="sync-body">
+        <div id="codex-host-config" class="desktop-only">
+          <button id="codex-folder" class="quiet" type="button">选择工作目录</button>
+          <p id="codex-folder-label"></p>
+          <label class="switch-row">允许已配对设备使用会话<input id="codex-remote" type="checkbox"></label>
+          <label class="switch-row">允许在所选目录内写入<input id="codex-write" type="checkbox"></label>
+        </div>
+        <label>会话<select id="codex-thread" aria-label="主机 Codex 会话"><option value="">新会话</option></select></label>
+        <div class="project-links">
+          <button id="codex-refresh" type="button" class="quiet">刷新</button>
+          <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享给已配对设备</button>
+          <button id="codex-older" type="button" class="quiet" hidden>加载更早消息</button>
+        </div>
+        <div id="codex-history" aria-label="会话消息"></div>
+        <form id="codex-form">
+          <label>给主机的任务<textarea id="codex-prompt" required maxlength="12000"></textarea></label>
+          <div class="project-links">
+            <button id="codex-send" type="submit" class="primary">发送任务</button>
+            <button id="codex-stop" type="button" class="quiet" hidden>停止</button>
+          </div>
+        </form>
+        <p id="codex-status" role="status"></p>
+        <div id="codex-output" class="answer" hidden></div>
+        <details id="codex-log" hidden><summary>命令输出</summary><pre></pre></details>
+      </div>
+    </section>
     <section id="ai-view" class="view sub-view" hidden>
       <div class="subhead"><h1>问便签 AI</h1><button class="quiet back">返回</button></div>
       <form id="ai-form">
-        <label>读取范围<select id="scope"><option value="current">当前分类 · 本页</option><option value="history">当前分类 · 含历史</option></select></label>
-        <p>可使用配置好的 API，或复制便签和问题后粘贴到 ChatGPT 聊天。</p>
+        <label>回答方式<select id="ai-provider"><option value="codex">主机 Codex</option><option value="api">已配置的 API</option></select></label>
+        <div class="ai-scope">
+          <label>日期<select id="scope"><option value="auto">按问题识别</option><option value="current">当前日期</option><option value="history">全部日期</option></select></label>
+          <label>分类<select id="category-scope"><option value="auto">按问题识别</option><option value="current">当前分类</option><option value="all">全部分类</option></select></label>
+        </div>
         <label for="prompt">你的问题</label>
         <textarea id="prompt" maxlength="2000" placeholder="例如，还有哪些事情没做？" required></textarea>
         <button id="send-question" type="submit" class="primary">发送</button>
-        <div class="project-links">
-          <button id="copy-chat" type="button" class="quiet">复制到 ChatGPT</button>
-          <button id="open-chat" type="button" class="quiet">打开 ChatGPT 网页</button>
-        </div>
-        <textarea id="chat-text" aria-label="可手动复制的聊天内容" readonly hidden></textarea>
+        <button id="ai-cancel" type="button" class="quiet" hidden>停止 Codex</button>
         <div id="answer" class="answer" role="status" hidden></div>
       </form>
     </section>

@@ -3,7 +3,7 @@ import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core'
 import { InAppBrowser, DefaultWebViewOptions, ToolbarPosition } from '@capacitor/inappbrowser'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { defaultSettings, defaultCategory, builtInCategories, datesFor, hasContent, newCategory, newDayNote, noteKey, nodeText, localDay } from '../shared/notes.mjs'
-import { chatMessages, endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
+import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
 import { webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
 
@@ -225,6 +225,7 @@ export function createMobileBridge() {
     pairSync: sync.pairWith,
     unpairSync: sync.unpair,
     runSync: sync.run,
+    codex: sync.codex,
     syncDrafts: () => localDrafts,
     onUpdate: noop,
     browserViewport: noop,
@@ -291,12 +292,8 @@ export function createMobileBridge() {
       if (result.status < 200 || result.status >= 300) throw new Error('AI API 返回 HTTP ' + result.status)
       return modelAnswer(result.data)
     },
-    async copyChat(request) {
-      const text = chatMessages(notes, request).map(message => message.content).join('\n\n')
-      try { await navigator.clipboard.writeText(text) } catch { return text }
-    },
     async openProject(target) {
-      const url = { repo: 'https://github.com/SDUM-Liu/momo-notes', issues: 'https://github.com/SDUM-Liu/momo-notes/issues', chat: 'https://chatgpt.com/' }[target]
+      const url = { repo: 'https://github.com/SDUM-Liu/momo-notes', issues: 'https://github.com/SDUM-Liu/momo-notes/issues' }[target]
       if (typeof url !== 'string') return
       if (native) await InAppBrowser.openInExternalBrowser({ url })
       else window.open(url, '_blank', 'noopener,noreferrer')
