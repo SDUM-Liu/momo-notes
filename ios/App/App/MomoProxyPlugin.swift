@@ -68,7 +68,9 @@ public final class MomoProxyPlugin: CAPPlugin, CAPBridgedPlugin {
 public final class MomoSyncPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "MomoSyncPlugin"
     public let jsName = "MomoSync"
-    public let pluginMethods = [CAPPluginMethod(name: "exchange", returnType: CAPPluginReturnPromise)]
+    public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "exchange", returnType: CAPPluginReturnPromise)
+    ]
 
     @objc func exchange(_ call: CAPPluginCall) {
         guard let host = call.getString("host"), let address = IPv4Address(host),
