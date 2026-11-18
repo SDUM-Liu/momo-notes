@@ -48,6 +48,7 @@ npm start
 - Android 使用 `npm run mobile:sync -- android` 后在 Android Studio 打开 `android/`，或在该目录运行 `./gradlew assembleDebug`。需 JDK 21、Android SDK 36。应用要求 Android 9 及以上。
 - iOS 使用 `npm run mobile:sync -- ios` 后在 Xcode 打开 `ios/App/App.xcodeproj`。应用要求 iOS 15.4 及以上。
 - 发布正式版时，从同一次构建上传平台的安装包和更新元数据。Windows 需要 `.exe.blockmap` 和 `latest.yml`，Ubuntu 需要 `latest-linux.yml`，正式签名的 macOS 版需要 `latest-mac.yml` 及构建出的块映射。
+- 创建指向构建提交的草稿 Release 后，可以手动运行 `Upload release assets`，提供成功的构建运行 ID 和版本号。工作流校验更新包，再把各平台构建附到草稿。确认后可公开发布。
 - `main` 是开发主线。每次正式发布保留 `v版本号` 标签、GitHub Release 和 `release/版本号` 分支。
 
 源码采用 MIT 许可证。

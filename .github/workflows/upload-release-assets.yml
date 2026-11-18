@@ -1,0 +1,71 @@
+name: Upload release assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run:
+        description: Successful Platform builds run ID
+        required: true
+        type: string
+      version:
+        description: Version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  upload:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN: ${{ inputs.build_run }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Verify source build and draft release
+        run: |
+          [[ "$BUILD_RUN" =~ ^[0-9]+$ && "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          build="$(gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN")"
+          [[ "$(jq -r '.path' <<< "$build")" == ".github/workflows/platform-builds.yml" ]]
+          [[ "$(jq -r '.head_branch' <<< "$build")" == "main" ]]
+          [[ "$(jq -r '.conclusion' <<< "$build")" == "success" ]]
+          source="$(jq -r '.head_sha' <<< "$build")"
+          release="$(gh release view "v$VERSION" --json isDraft,targetCommitish)"
+          [[ "$(jq -r '.isDraft' <<< "$release")" == "true" ]]
+          [[ "$(jq -r '.targetCommitish' <<< "$release")" == "$source" ]]
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run }}
+          path: artifacts
+      - name: Verify update hashes and attach packages
+        run: |
+          win="artifacts/Windows-x64/Momo-Notes-$VERSION-Setup-x64.exe"
+          linux="artifacts/Ubuntu-x64/Momo-Notes-$VERSION-linux-x64.AppImage"
+          verify() {
+            local file="$1" manifest="$2" expected actual
+            expected="$(awk '/^[[:space:]]*sha512:/{print $2; exit}' "$manifest")"
+            actual="$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)"
+            grep -Fx "version: $VERSION" "$manifest"
+            grep -F "$(basename "$file")" "$manifest"
+            [[ -n "$expected" && "$expected" == "$actual" ]]
+          }
+          verify "$win" artifacts/Windows-x64/latest.yml
+          verify "$linux" artifacts/Ubuntu-x64/latest-linux.yml
+          cp artifacts/Android-debug/app-debug.apk "Momo-Notes-$VERSION-Android-debug.apk"
+          cp artifacts/iOS-simulator/Momo-Notes-iOS-Simulator.zip "Momo-Notes-$VERSION-iOS-Simulator.zip"
+          gh release upload "v$VERSION" --clobber \
+            "$win" "$win.blockmap" artifacts/Windows-x64/latest.yml \
+            "$linux" artifacts/Ubuntu-x64/latest-linux.yml \
+            "artifacts/macOS-arm64/Momo-Notes-$VERSION-mac-arm64.dmg" \
+            "artifacts/macOS-x64/Momo-Notes-$VERSION-mac-x64.dmg" \
+            "Momo-Notes-$VERSION-Android-debug.apk" "Momo-Notes-$VERSION-iOS-Simulator.zip"
