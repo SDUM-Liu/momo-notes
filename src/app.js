@@ -568,7 +568,7 @@ $('sync-photo').onchange = async event => {
   if (!file) return
   try {
     if (file.size > 20 * 1024 * 1024) throw new Error('请选择 20 MB 以内的二维码图片')
-    const image = new Image()
+    const image = new window.Image()
     image.src = await fileData(file)
     await image.decode()
     const factor = Math.min(1, 1600 / Math.max(image.width, image.height))
