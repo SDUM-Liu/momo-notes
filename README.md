@@ -8,7 +8,7 @@
 
 在 [GitHub Releases](https://github.com/SDUM-Liu/momo-notes/releases) 下载对应平台的包。Windows 安装程序未签名。Ubuntu 版为 x64 AppImage，贴边和窗口定位使用 X11 或 XWayland。
 
-跨平台构建可在 [GitHub Actions](https://github.com/SDUM-Liu/momo-notes/actions) 下载。macOS 预览包未签名或公证，iOS 构建用于模拟器，Android APK 是调试签名的测试包。iOS 真机分发和 macOS 公证需要 Apple 签名凭据，Android 正式分发需要固定的签名密钥。
+跨平台构建可在 [GitHub Actions](https://github.com/SDUM-Liu/momo-notes/actions) 下载。macOS 预览包未签名或公证，iOS 构建用于模拟器。Android 从 0.5.4 起发布单个 `Momo-Notes-版本-Android.apk`，应用名为「桃桃便签」。后续使用同一发布证书签名的版本可覆盖安装并保留便签和设置。之前安装过旧签名版本的用户，首次切换前请先在「设备同步」确认便签已同步到主机，并保存本机未合并的草稿。
 
 ## 在线更新
 
@@ -79,6 +79,7 @@ npm start
 
 - Windows 使用 `npm run dist`，Ubuntu 使用 `npm run dist:linux`，macOS 使用 `npm run dist:mac:preview` 或在有正式签名时使用 `npm run dist:mac`。输出在 `release/`。
 - Android 使用 `npm run mobile:sync -- android` 后在 Android Studio 打开 `android/`，或在该目录运行 `./gradlew assembleDebug`。需 JDK 21、Android SDK 36。应用要求 Android 9 及以上。
+- 正式 Android APK 由主线工作流组装并使用 GitHub Actions 内的发布密钥签名，通过 `android/release-certificate.sha256` 核对证书指纹。
 - iOS 使用 `npm run mobile:sync -- ios` 后在 Xcode 打开 `ios/App/App.xcodeproj`。应用要求 iOS 15.4 及以上。
 - 发布正式版时，从同一次构建上传平台的安装包和更新元数据。Windows 需要 `.exe.blockmap` 和 `latest.yml`，Ubuntu 需要 `latest-linux.yml`，正式签名的 macOS 版需要 `latest-mac.yml` 及构建出的块映射。
 - 创建指向构建提交的草稿 Release 后，可以手动运行 `Upload release assets`，提供成功的构建运行 ID 和版本号。工作流校验更新包，再把各平台构建附到草稿。确认后可公开发布。

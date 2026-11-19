@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: error
 
   android:
-    name: Android · debug APK
+    name: Android · APK
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -78,12 +78,36 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platforms;android-36 build-tools;36.0.0
-      - run: bash gradlew --no-daemon assembleDebug
+      - run: bash gradlew --no-daemon assembleRelease
         working-directory: android
+      - name: Sign and verify the Android release
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          ANDROID_RELEASE_KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          : "${ANDROID_RELEASE_KEYSTORE:?Missing Android release keystore}"
+          : "${ANDROID_RELEASE_KEY_PASSWORD:?Missing Android release keystore password}"
+          umask 077
+          temporary="$(mktemp -d)"
+          trap 'rm -f "$temporary/release.p12" "$temporary/aligned.apk"; rmdir "$temporary"' EXIT
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE" | tr -d '\r\n' | base64 --decode > "$temporary/release.p12"
+          ANDROID_RELEASE_KEY_PASSWORD="$(printf '%s' "$ANDROID_RELEASE_KEY_PASSWORD" | tr -d '\r\n')"
+          build_tools="$ANDROID_HOME/build-tools/36.0.0"
+          output="android/app/build/outputs/apk/release"
+          "$build_tools/zipalign" -P 16 -f 4 "$output/app-release-unsigned.apk" "$temporary/aligned.apk"
+          "$build_tools/apksigner" sign --ks "$temporary/release.p12" --ks-type PKCS12 \
+            --ks-key-alias momo-notes --ks-pass env:ANDROID_RELEASE_KEY_PASSWORD \
+            --v4-signing-enabled false --out "$output/app-release.apk" "$temporary/aligned.apk"
+          verification="$("$build_tools/apksigner" verify --print-certs "$output/app-release.apk")"
+          fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$verification")"
+          [[ "$fingerprint" == "$(cat android/release-certificate.sha256)" ]]
       - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main'
         with:
-          name: Android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Android
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
   ios:

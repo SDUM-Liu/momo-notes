@@ -8,7 +8,7 @@ const platformFiles = [
   ['darwin-x64', 'macOS · Intel', /^-mac-x64\.dmg$/],
   ['linux-x64', 'Linux · x64', /^-linux-(?:x86_64|x64)\.AppImage$/],
   ['linux-arm64', 'Linux · ARM64', /^-linux-(?:aarch64|arm64)\.AppImage$/],
-  ['android', 'Android · 调试 APK', /^-Android-debug\.apk$/],
+  ['android', 'Android · APK', /^-Android(?:-debug)?\.apk$/],
   ['ios', 'iOS · 模拟器', /^-iOS-Simulator\.zip$/],
 ]
 

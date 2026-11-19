@@ -64,11 +64,11 @@ jobs:
           }
           verify "$win" artifacts/Windows-x64/latest.yml
           verify "$linux" "$linux_manifest"
-          cp artifacts/Android-debug/app-debug.apk "Momo-Notes-$VERSION-Android-debug.apk"
+          cp artifacts/Android/app-release.apk "Momo-Notes-$VERSION-Android.apk"
           cp artifacts/iOS-simulator/Momo-Notes-iOS-Simulator.zip "Momo-Notes-$VERSION-iOS-Simulator.zip"
           gh release upload "v$VERSION" --clobber \
             "$win" "$win.blockmap" artifacts/Windows-x64/latest.yml \
             "$linux" "$linux_manifest" \
             "artifacts/macOS-arm64/Momo-Notes-$VERSION-mac-arm64.dmg" \
             "artifacts/macOS-x64/Momo-Notes-$VERSION-mac-x64.dmg" \
-            "Momo-Notes-$VERSION-Android-debug.apk" "Momo-Notes-$VERSION-iOS-Simulator.zip"
+            "Momo-Notes-$VERSION-Android.apk" "Momo-Notes-$VERSION-iOS-Simulator.zip"
