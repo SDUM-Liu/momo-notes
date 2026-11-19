@@ -9,10 +9,10 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     private static MainActivity current;
     private boolean openFloating;
-    private boolean resumed;
+    private boolean editorResumed;
 
     static MainActivity current() { return current; }
-    boolean isResumed() { return resumed; }
+    boolean isEditorResumed() { return editorResumed; }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -20,6 +20,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(MomoSyncPlugin.class);
         registerPlugin(MomoPetPlugin.class);
         super.onCreate(savedInstanceState);
+        if (getBridge() == null) return;
         getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
         current = this;
         openFloating = PetOverlayService.OPEN_FLOATING_NOTE.equals(getIntent().getAction());
@@ -33,7 +34,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onResume() {
-        resumed = true;
+        editorResumed = true;
         PetOverlayService.dismissNote();
         super.onResume();
         PetOverlayService.setEditorVisible(true);
@@ -42,7 +43,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onPause() {
-        resumed = false;
+        editorResumed = false;
         PetOverlayService.setEditorVisible(false);
         super.onPause();
         if (openFloating) {

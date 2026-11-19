@@ -87,7 +87,7 @@ public class MomoPetPlugin extends Plugin {
     public void foreground(PluginCall call) {
         MainActivity activity = (MainActivity) getActivity();
         activity.runOnUiThread(() -> {
-            if (activity.isResumed()) { call.resolve(); return; }
+            if (activity.isEditorResumed()) { call.resolve(); return; }
             if (foregroundCall != null) { call.reject("正在打开便签应用"); return; }
             foregroundCall = call;
             try {
