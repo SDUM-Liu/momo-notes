@@ -512,7 +512,7 @@ function renderEdgePreview() {
 
 function drawUpdate(update) {
   updateState = update
-  const { status, target, progress } = update
+  const { status, target, progress, error } = update
   const messages = {
     idle: '',
     unavailable: '请使用对应平台的安装包更新',
@@ -521,20 +521,25 @@ function drawUpdate(update) {
     available: '可更新至 v' + target,
     downloading: progress === undefined ? '正在准备下载…' : '正在下载 · ' + progress + '%',
     ready: 'v' + target + ' 已下载',
-    installing: '正在退出并安装…',
+    'permission-required': '请允许桃桃便签安装应用，返回后会打开安装界面',
+    'installer-open': 'v' + target + ' 已下载，请在系统安装界面确认',
+    'distribution-unavailable': '发现 v' + target + '，当前构建没有可安装的更新包',
+    installing: api.mobile ? '正在打开系统安装界面…' : '正在退出并安装…',
     'check-error': '检查失败，请确认可访问 GitHub',
     'download-error': '下载失败，请重试',
     'install-error': '无法启动安装，请重试',
   }
   const actionLabels = {
-    available: '下载更新', downloading: '下载中', ready: '安装并重启',
+    available: '下载更新', downloading: '下载中', ready: api.mobile ? '打开安装包' : '安装并重启',
+    'permission-required': '授予安装权限', 'installer-open': '打开安装包',
     installing: '安装中', 'download-error': '重新下载', 'install-error': '重试安装',
   }
   $('app-version').textContent = '当前版本 v' + update.version
-  $('update-status').textContent = messages[status]
+  $('update-status').textContent = error || messages[status]
   $('update-status').classList.toggle('error', status.endsWith('-error'))
-  $('settings').toggleAttribute('data-update', ['available', 'ready', 'downloading', 'download-error', 'install-error'].includes(status))
-  $('update-action').textContent = api.mobile && status === 'available' ? '查看更新' : actionLabels[status] ?? '检查更新'
+  $('settings').toggleAttribute('data-update', ['available', 'ready', 'downloading', 'download-error', 'install-error',
+    'permission-required', 'installer-open'].includes(status))
+  $('update-action').textContent = actionLabels[status] ?? '检查更新'
   $('update-action').disabled = ['unavailable', 'checking', 'downloading', 'installing'].includes(status)
   $('automatic-update-row').hidden = api.mobile || status === 'unavailable'
   $('update-progress').hidden = status !== 'downloading'
@@ -546,15 +551,14 @@ $('update-action').onclick = async () => {
   const { status } = updateState
   $('update-action').disabled = true
   try {
-    if (api.mobile && status === 'available') {
-      await api.openUpdate()
-      $('update-action').disabled = false
-    } else if (['ready', 'install-error'].includes(status)) {
+    if (['ready', 'install-error', 'permission-required', 'installer-open'].includes(status)) {
       await saveBeforeSwitch()
       await api.installUpdate()
     } else if (['available', 'download-error'].includes(status)) {
+      if (api.mobile) await saveBeforeSwitch()
       await api.downloadUpdate()
     } else {
+      if (api.mobile) await saveBeforeSwitch()
       await api.checkUpdate()
     }
   } catch (error) {

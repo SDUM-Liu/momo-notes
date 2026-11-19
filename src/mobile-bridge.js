@@ -41,9 +41,11 @@ function transaction(db, store, write, operation) {
 
 export function createMobileBridge() {
   const native = Capacitor.isNativePlatform()
-  const updates = mobileUpdates(native)
   const platform = Capacitor.getPlatform()
   const floatingPet = platform === 'android' && Capacitor.isPluginAvailable('MomoPet')
+  const updates = mobileUpdates(native, async () => {
+    if (floatingPet && document.documentElement.dataset.momoFloating === 'true') await petOverlay.foreground()
+  })
   const ready = openDatabase()
   const notes = Object.create(null)
   const records = Object.create(null)
@@ -300,7 +302,8 @@ export function createMobileBridge() {
     browserBack: noop,
     hideBrowser: noop,
     checkUpdate: updates.checkUpdate,
-    openUpdate: updates.openUpdate,
+    downloadUpdate: updates.downloadUpdate,
+    installUpdate: updates.installUpdate,
     toggle() {
       if (mode === 'note' && floatingPet) return petOverlay.dismiss()
       mode = mode === 'note' ? 'pet' : 'note'

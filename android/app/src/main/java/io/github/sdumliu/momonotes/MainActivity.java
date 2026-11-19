@@ -20,6 +20,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(MomoProxyPlugin.class);
         registerPlugin(MomoSyncPlugin.class);
         registerPlugin(MomoPetPlugin.class);
+        registerPlugin(MomoUpdatesPlugin.class);
         super.onCreate(savedInstanceState);
         if (getBridge() == null) return;
         getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
