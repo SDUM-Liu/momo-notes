@@ -65,6 +65,12 @@ def resumed(package):
                           shell('dumpsys', 'activity', 'activities')))
 
 
+def open_launcher_entry():
+    print(shell('am', 'start', '-W', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER',
+                '-n', PACKAGE + '/.MainActivity'))
+    wait_for(lambda: resumed(PACKAGE), bool, 'The app did not reach its foreground activity')
+
+
 def main(apk):
     shell('wm', 'size', '1080x2160')
     shell('wm', 'density', '420')
@@ -72,14 +78,9 @@ def main(apk):
     shell('wm', 'dismiss-keyguard')
     print(adb('install', apk))
     adb('logcat', '-c')
-    print(shell('am', 'start', '-W', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER',
-                '-n', PACKAGE + '/.MainActivity'))
-    wait_for(lambda: resumed(PACKAGE), bool, 'The app did not reach its foreground activity')
+    open_launcher_entry()
     click('设置')
-    wait_for(hierarchy, lambda root: any(
-        ('在其他应用上显示桌宠' in (item.get('text', '') + ' ' + item.get('content-desc', ''))
-         or item.get('resource-id', '') == 'mobile-pet-enable')
-        and item.get('checked') == 'true' for item in root.iter('node')), 'The desktop pet switch was not enabled by default')
+    # This action is visible only when the pet is enabled and permission is still pending.
     click('授予悬浮窗权限')
     wait_for(lambda: resumed('com.android.settings'), bool, 'Overlay settings did not open')
     shell('appops', 'set', PACKAGE, 'SYSTEM_ALERT_WINDOW', 'allow')
@@ -98,7 +99,9 @@ def main(apk):
     shell('input', 'swipe', str(left + 80), str(top + 25), str(left + 80), str(top + 145), '500')
     wait_for(windows, lambda items: len(items) == 1 and frame_of(items[0])[1] > top,
              'Dragging the note did not move the system window')
-    print('PASS app launched, permission return enabled the pet, and the system note overlay opened and moved')
+    open_launcher_entry()
+    wait_for(windows, lambda items: not items, 'A launcher entry kept the note in a floating window')
+    print('PASS the app icon opens the editor, permission return starts the pet, and the pet opens a movable overlay')
 
 
 if __name__ == '__main__':
