@@ -96,7 +96,9 @@ def main(apk):
     note = wait_for(windows, lambda items: len(items) == 1 and 'NOT_FOCUSABLE' not in items[0],
                     'Tapping the pet did not open a focusable system overlay')
     left, top, _, _ = frame_of(note[0])
-    shell('input', 'swipe', str(left + 80), str(top + 25), str(left + 80), str(top + 145), '500')
+    # At the fixed test density the handle's painted grip is 194 px from the left edge.
+    time.sleep(1)
+    shell('input', 'swipe', str(left + 194), str(top + 26), str(left + 194), str(top + 166), '600')
     wait_for(windows, lambda items: len(items) == 1 and frame_of(items[0])[1] > top,
              'Dragging the note did not move the system window')
     open_launcher_entry()
