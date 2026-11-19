@@ -118,7 +118,8 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     run,
     probe,
     disconnected(connection) {
-      if (!pair || pair.key !== connection.key || pair.room !== connection.room || pair.relay !== connection.relay) return
+      if (!pair || pair.key !== connection.key || pair.room !== connection.room ||
+          pair.relay !== connection.relay || pair.fallback !== connection.fallback || pair.backupRoom !== connection.backupRoom) return
       peerLocked = true
       verified = false
       error = '主机连接中断，等待重新同步'

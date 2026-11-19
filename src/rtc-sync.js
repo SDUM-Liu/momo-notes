@@ -15,7 +15,7 @@ function socketLink(options, onFrame, onClose) {
   let readyTimer
   let resolveReady, rejectReady
   const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject })
-  readyTimer = setTimeout(() => { rejectReady(offline()); socket.close() }, 12000)
+  readyTimer = setTimeout(() => { rejectReady(offline()); socket.close() }, options.timeout ?? 12000)
   const heartbeat = setInterval(() => {
     if (socket.readyState !== WebSocket.OPEN) return
     if (Date.now() - lastReply > 80000) socket.close()
@@ -106,8 +106,14 @@ const signalContext = (type, peer) => 'rtc/' + type + '/' + peer
 
 export function hostSyncLink(config, exchange, onStatus) {
   let socket, generation = 0, retry
+  let status
   let closed = false
   const peers = new Map()
+  function report(value) {
+    if (status === value) return
+    status = value
+    onStatus(value)
+  }
   function clearPeers() {
     for (const peer of peers.values()) peer.pc?.close()
     peers.clear()
@@ -165,7 +171,7 @@ export function hostSyncLink(config, exchange, onStatus) {
       })
       socket = link
       await link.ready
-      if (socket === link) onStatus('online')
+      if (socket === link) report('online')
     } catch {
       if (generation === attempt) {
         socket?.close()
@@ -175,11 +181,11 @@ export function hostSyncLink(config, exchange, onStatus) {
   }
   function reconnect() {
     if (closed) return
-    onStatus('offline')
+    report('offline')
     clearTimeout(retry)
     retry = setTimeout(connect, 3500)
   }
-  onStatus('connecting')
+  report('connecting')
   void connect()
   return () => {
     closed = true
@@ -189,12 +195,10 @@ export function hostSyncLink(config, exchange, onStatus) {
   }
 }
 
-async function clientLink(connection, disconnected) {
+async function clientLink(connection, route, disconnected) {
   const token = 'join.' + joinToken(connection.key)
   const pending = new Map()
   let peer, pc, channel, link, stopped = false
-  let resolveDirect
-  const direct = new Promise(resolve => { resolveDirect = resolve })
   function close() {
     if (stopped) return
     stopped = true
@@ -207,7 +211,7 @@ async function clientLink(connection, disconnected) {
     return chunks((id, message) => pending.get(id)?.resolve({ message, via }))
   }
   const receiveRelay = receiver('relay')
-  link = socketLink({ ...connection, token }, frame => {
+  link = socketLink({ ...route, token, timeout: 6000 }, frame => {
     if (frame.kind === 'data') receiveRelay(frame.packet)
     if (frame.kind === 'signal' && pc && frame.peer === peer) {
       try {
@@ -221,19 +225,16 @@ async function clientLink(connection, disconnected) {
     void (async () => {
       pc = new RTCPeerConnection({ iceServers })
       channel = pc.createDataChannel('momo-sync')
-      channel.onopen = resolveDirect
       const receiveDirect = receiver('direct')
       channel.onmessage = event => receiveDirect(event.data)
       const offer = await gather(pc, 'offer')
       if (!stopped) link.send('signal', seal(connection.key, signalContext('offer', peer), offer))
     })().catch(() => {})
   }
-  const startup = pc ? Promise.race([direct, pause(7400)]) : Promise.resolve()
   return {
     close,
     available: () => !stopped && link.available(),
     async exchange(message) {
-      await startup
       if (stopped) throw offline()
       const id = transferId()
       const useDirect = channel?.readyState === 'open'
@@ -250,14 +251,34 @@ async function clientLink(connection, disconnected) {
   }
 }
 
-export function mobileSyncLink(disconnected = () => {}) {
+const diagnosisMessage = {
+  unauthorized: '配对码已失效，请从主机重新获取二维码',
+  host_offline: '手机已连上同步服务，但主机未在线，请在电脑上打开桃桃并开启主机同步',
+  room_full: '主机连接数已满，请稍后重试',
+  service_unavailable: '手机无法访问同步服务，请检查当前网络或让主机配置可连通的同步服务',
+  websocket_unavailable: '手机能访问同步服务，但同步连接未建立，请尝试切换手机网络',
+}
+
+export function mobileSyncLink(disconnected = () => {}, diagnose) {
   const links = new Map()
+  async function connect(connection) {
+    const routes = [{ relay: connection.relay, room: connection.room }]
+    if (connection.fallback) routes.push({ relay: connection.fallback, room: connection.backupRoom })
+    for (const route of routes) {
+      try { return await clientLink(connection, route, disconnected) } catch {}
+    }
+    if (!diagnose) throw offline()
+    const token = 'join.' + joinToken(connection.key)
+    const results = await Promise.all(routes.map(route => diagnose({ ...route, token }).catch(() => null)))
+    const message = Object.keys(diagnosisMessage).find(status => results.includes(status))
+    throw message ? new Error(diagnosisMessage[message]) : offline()
+  }
   return {
     async exchange(connection, message) {
-      const id = connection.relay + '/' + connection.room + '/' + connection.key
+      const id = JSON.stringify([connection.relay, connection.fallback, connection.room, connection.backupRoom, connection.key])
       let ready = links.get(id)
       if (!ready || !(await ready).available()) {
-        ready = clientLink(connection, disconnected)
+        ready = connect(connection)
         links.set(id, ready)
         void ready.catch(() => { if (links.get(id) === ready) links.delete(id) })
       }

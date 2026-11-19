@@ -224,7 +224,7 @@ time { font-size: 11px; color: var(--muted); }
 .sync-body { flex: 1; overflow: auto; padding: 2px 14px 14px; }
 .sync-body label { display: grid; gap: 4px; margin-block: 8px; }
 .sync-body p { color: var(--muted); }
-#sync-qr { width: 158px; height: 158px; margin-top: 9px; }
+#sync-qr { width: min(208px, 100%); aspect-ratio: 1; margin-top: 9px; }
 .qr-picker { cursor: pointer; }
 .qr-picker input { max-width: 100%; }
 body[data-platform="mobile"] {
@@ -247,6 +247,16 @@ body[data-platform="mobile"][data-mode="note"] .mascot {
 body[data-platform="mobile"][data-mode="pet"] .mascot { display: none; }
 #mobile-dismiss { position: absolute; inset: 0; border: 0; padding: 0; background: #48344238; }
 #mobile-open { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+html[data-momo-floating="true"] #mobile-dismiss { display: none; }
+html[data-momo-floating="true"] body[data-platform="mobile"] .panel {
+  inset: 18px 3px 3px;
+  width: auto; height: auto;
+  transform: none;
+  box-shadow: 0 1px 5px #42253844;
+}
+html[data-momo-floating="true"] body[data-platform="mobile"][data-mode="note"] .mascot {
+  inset: 0 10px auto auto;
+}
 body[data-platform="mobile"] .top { padding-right: 53px; }
 body[data-platform="mobile"] :is(input, select, textarea, .tiptap) { font-size: 16px; }
 body[data-platform="mobile"] .link-form { top: 133px; }

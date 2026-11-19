@@ -11,6 +11,7 @@ function fromHex(value) {
 
 export const relayProtocol = 'momo-sync-v1'
 export const roomPattern = /^[a-f0-9]{64}$/
+export const maxPairingLength = 768
 
 export function relayOrigin(value) {
   const url = new URL(String(value ?? '').trim())
@@ -27,17 +28,26 @@ export function joinToken(key) {
   return digest('momo-sync-v2/join/' + key)
 }
 
-export function pairingCode(relay, room, key) {
-  return 'momo2:' + btoa(JSON.stringify([relay, room, key])).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+export function pairingCode(relay, room, key, fallback, backupRoom) {
+  const version = fallback ? 'momo3:' : 'momo2:'
+  const data = fallback ? [[relay, fallback], room, key, backupRoom] : [relay, room, key]
+  return version + btoa(JSON.stringify(data)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 
 export function parsePairing(value) {
   const code = String(value).trim()
   if (code.startsWith('momo1:')) throw new Error('这是旧版配对码，请在新版主机重新生成二维码')
-  if (code.length <= 480 && /^momo2:[\w-]+$/.test(code)) {
+  if (code.length <= maxPairingLength && /^momo[23]:[\w-]+$/.test(code)) {
     try {
-      const [relay, room, key] = JSON.parse(atob(code.slice(6).replaceAll('-', '+').replaceAll('_', '/')))
-      if (roomPattern.test(room) && roomPattern.test(key)) return { relay: relayOrigin(relay), room, key }
+      const [routes, room, key, backupRoom] = JSON.parse(atob(code.slice(6).replaceAll('-', '+').replaceAll('_', '/')))
+      if (typeof room !== 'string' || typeof key !== 'string' || !roomPattern.test(room) || !roomPattern.test(key)) throw new Error()
+      if (code.startsWith('momo2:') && typeof routes === 'string') return { relay: relayOrigin(routes), room, key }
+      if (code.startsWith('momo3:') && Array.isArray(routes) && routes.length === 2 && routes.every(url => typeof url === 'string')) {
+        const [relay, fallback] = routes.map(relayOrigin)
+        if (relay !== fallback && typeof backupRoom === 'string' && roomPattern.test(backupRoom) && backupRoom !== room) {
+          return { relay, fallback, room, backupRoom, key }
+        }
+      }
     } catch {}
   }
   throw new Error('请复制完整的主机配对码')

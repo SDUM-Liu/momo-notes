@@ -1,9 +1,11 @@
 const path = require('node:path')
 const fs = require('node:fs')
 const { randomBytes, createHash } = require('node:crypto')
-const { seal, unseal, wireLimit, pairingCode, relayOrigin } = require('../shared/sync.mjs')
+const { seal, unseal, wireLimit, pairingCode, relayOrigin, maxPairingLength } = require('../shared/sync.mjs')
 const { noteIdentity, noteKey, localDay, validateCategory, hasContent } = require('../shared/notes.mjs')
 const { revisionOf } = require('./data.cjs')
+const digest = value => createHash('sha256').update(value).digest('hex')
+const backupOwner = owner => digest('momo-sync-v3/backup/' + owner)
 
 function createSync(directory, store, ask, notify, codex) {
   const filename = path.join(directory, 'sync.json')
@@ -34,12 +36,18 @@ function createSync(directory, store, ask, notify, codex) {
 
   const defaultRelay = process.env.MOMO_RELAY_URL || require('../shared/relay.json').url
   const relay = () => config.relay || defaultRelay
+  const routes = () => [relay(), config.fallback].filter(Boolean)
   const enabled = () => Boolean(config.enabled && config.owner && config.key && relay())
-  const room = () => createHash('sha256').update(config.owner).digest('hex')
-  let status = 'offline'
+  const room = () => digest(config.owner)
+  const backupRoom = () => digest(backupOwner(config.owner))
+  const statuses = new Map()
+  const status = () => routes().some(url => statuses.get(url) === 'online') ? 'online'
+    : routes().some(url => !statuses.has(url) || statuses.get(url) === 'connecting') ? 'connecting' : 'offline'
 
   function state() {
-    return { role: 'host', enabled: enabled(), relay: relay(), status, locked: Boolean(lease) }
+    return { role: 'host', enabled: enabled(), relay: relay(), fallback: config.fallback,
+      onlineRelay: routes().find(url => statuses.get(url) === 'online'),
+      status: enabled() ? status() : 'offline', locked: Boolean(lease) }
   }
 
   function put({ key, doc, base }, remote = true) {
@@ -128,18 +136,21 @@ function createSync(directory, store, ask, notify, codex) {
     return seal(key, 'reply/' + request.id, { ok: false, error: '便签超出单页同步上限' })
   }
 
-  function setEnabled(value, endpoint) {
+  function setEnabled(value, endpoint, backup) {
     if (value) {
-      const url = String(endpoint || relay()).trim()
-      if (!url) throw new Error('请先填写异地同步服务地址')
-      config.relay = relayOrigin(url)
-      config.key ||= randomBytes(32).toString('hex')
-      config.owner ||= randomBytes(32).toString('hex')
-      status = 'connecting'
+      const primary = relayOrigin(endpoint || relay())
+      const fallback = backup === undefined ? config.fallback : backup.trim() ? relayOrigin(backup) : undefined
+      if (fallback === primary) throw new Error('备用同步服务需要使用不同的地址')
+      const owner = config.owner || randomBytes(32).toString('hex')
+      const key = config.key || randomBytes(32).toString('hex')
+      if (pairingCode(primary, digest(owner), key, fallback, digest(backupOwner(owner))).length > maxPairingLength) {
+        throw new Error('同步服务地址太长，无法生成配对码')
+      }
+      Object.assign(config, { relay: primary, fallback, owner, key })
     } else {
       unlock()
-      status = 'offline'
     }
+    statuses.clear()
     config.enabled = Boolean(value)
     persist()
     return state()
@@ -156,16 +167,20 @@ function createSync(directory, store, ask, notify, codex) {
     exchange,
     link() {
       if (!enabled() || !config.key || !config.owner) return null
-      return { relay: relay(), room: room(), key: config.key, owner: config.owner }
+      return { relay: relay(), fallback: config.fallback, room: room(), key: config.key, owner: config.owner,
+        ...(config.fallback ? { backupRoom: backupRoom(), backupOwner: backupOwner(config.owner) } : {}) }
     },
-    status(value, roomId) {
-      if (enabled() && config.owner && roomId === room() && ['online', 'offline', 'connecting'].includes(value)) status = value
+    status(value, roomId, endpoint = relay()) {
+      if (enabled() && routes().includes(endpoint) && roomId === (endpoint === relay() ? room() : backupRoom()) &&
+          ['online', 'offline', 'connecting'].includes(value)) {
+        statuses.set(endpoint, value)
+      }
       return state()
     },
     stop: unlock,
     code() {
-      if (!enabled() || status !== 'online') throw new Error('请先等待主机连上异地同步服务')
-      return pairingCode(relay(), room(), config.key)
+      if (!enabled() || status() !== 'online') throw new Error('请先等待主机连上异地同步服务')
+      return pairingCode(relay(), room(), config.key, config.fallback, backupRoom())
     },
     rotate() {
       if (!enabled()) throw new Error('请先开启主机同步')
@@ -173,7 +188,7 @@ function createSync(directory, store, ask, notify, codex) {
       config.owner = randomBytes(32).toString('hex')
       persist()
       replay.clear()
-      status = 'connecting'
+      statuses.clear()
       unlock()
       return state()
     },

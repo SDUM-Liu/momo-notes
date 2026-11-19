@@ -591,14 +591,15 @@ async function refreshMobilePet(wanted) {
   region.hidden = false
   try {
     let pet = await api.petState()
-    for (let attempt = 0; attempt < 4 && pet.permission && wanted !== undefined && pet.enabled !== wanted; attempt++) {
+    for (let attempt = 0; attempt < 12 && pet.permission && !pet.error && wanted !== undefined && pet.enabled !== wanted; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 200))
       pet = await api.petState()
     }
     $('mobile-pet-enable').checked = pet.enabled
-    description.textContent = pet.permission
-      ? (pet.enabled ? '收起便签后，桌宠会浮在其他应用上。' : '开启后可拖动桌宠，点它打开便签。')
-      : '请允许「显示在其他应用上层」，返回后再开启。'
+    description.textContent = pet.error || (pet.permission
+      ? (pet.enabled ? '点悬浮桌宠打开便签，拖动便签顶部可移动小窗。'
+        : wanted ? '系统已授予悬浮窗权限，但桌宠服务还未启动。请重新开启。' : '开启后可拖动桌宠，点它打开便签。')
+      : '请在系统列表中选择桃桃便签，允许「显示在其他应用上层」后返回。')
   } catch (error) {
     description.textContent = errorMessage(error)
   }
@@ -617,9 +618,12 @@ $('mobile-pet-enable').onchange = async event => {
     input.disabled = false
   }
 }
-if (api.floatingPet) document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && view === 'settings') void refreshMobilePet()
-})
+if (api.floatingPet) {
+  void api.onPetPermissionReturn?.(({ starting }) => refreshMobilePet(starting || undefined))
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && view === 'settings') void refreshMobilePet()
+  })
+}
 
 let syncState, qrRequest = 0, stopHostLink, hostLinkRevision = 0
 const syncPathLabel = via => via === 'direct' ? '点对点直连' : via === 'relay' ? '加密中继' : ''
@@ -629,13 +633,19 @@ async function connectHostLink() {
   stopHostLink?.()
   const config = await api.syncLink()
   if (!config || revision !== hostLinkRevision) return
-  stopHostLink = hostSyncLink(config, api.syncExchange, status => {
-    void api.syncLinkStatus(status, config.room).then(value => {
+  const routes = [{ relay: config.relay, room: config.room, owner: config.owner }]
+  if (config.fallback) routes.push({ relay: config.fallback, room: config.backupRoom, owner: config.backupOwner })
+  const links = routes.map(({ relay, room, owner }) => {
+    return hostSyncLink({ relay, room, owner, key: config.key }, api.syncExchange, status => {
       if (revision !== hostLinkRevision) return
-      drawSync(value)
-      if (view === 'sync') return showPairing()
-    }).catch(error => { $('sync-status').textContent = errorMessage(error) })
+      void api.syncLinkStatus(status, room, relay).then(value => {
+        if (revision !== hostLinkRevision) return
+        drawSync(value)
+        if (view === 'sync') return showPairing()
+      }).catch(error => { $('sync-status').textContent = errorMessage(error) })
+    })
   })
+  stopHostLink = () => links.forEach(stop => stop())
 }
 
 function drawSync(value) {
@@ -658,9 +668,13 @@ function drawSync(value) {
   $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
   $('sync-host-details').hidden = value.status !== 'online' || !value.enabled
   $('sync-relay').disabled = value.enabled
-  if (!$('sync-relay').value && value.relay) $('sync-relay').value = value.relay
+  $('sync-fallback').disabled = value.enabled
+  if (value.enabled || !$('sync-relay').value) $('sync-relay').value = value.relay || ''
+  if (value.enabled || !$('sync-fallback').value) $('sync-fallback').value = value.fallback || ''
   $('sync-status').textContent = value.enabled
-    ? { online: '主机已在线，可以扫码配对。', connecting: '正在连接异地同步服务…', offline: '异地同步服务暂不可达，正在重试。' }[value.status]
+    ? { online: value.fallback && value.onlineRelay === value.fallback
+          ? '主机已通过备用服务上线，可以扫码配对。' : '主机已在线，可以扫码配对。',
+        connecting: '正在连接异地同步服务…', offline: '电脑无法连接同步服务，正在重试。' }[value.status]
     : '将这台电脑设为便签和 AI 的主机。'
 }
 
@@ -674,7 +688,7 @@ async function showPairing() {
   if (view !== 'sync' || request !== qrRequest) return
   $('sync-code').value = code
   const qr = await import('qrcode')
-  const png = await (qr.default ?? qr).toDataURL(code, { width: 256, margin: 3 })
+  const png = await (qr.default ?? qr).toDataURL(code, { width: 384, margin: 4 })
   if (view !== 'sync' || request !== qrRequest) return
   $('sync-qr').src = png
   $('sync-qr').hidden = false
@@ -704,7 +718,7 @@ $('settings-sync').onclick = () => {
 }
 $('sync-back').onclick = () => showView('settings')
 $('sync-enable').onclick = () => syncAction(async () => {
-  await api.enableSync(!syncState.enabled, $('sync-relay').value)
+  await api.enableSync(!syncState.enabled, $('sync-relay').value, $('sync-fallback').value)
   await connectHostLink()
   return api.syncState()
 }, $('sync-enable'))

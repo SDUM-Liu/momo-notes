@@ -179,7 +179,20 @@ export function createMobileBridge() {
   }
 
   const runRefresh = () => refreshDay().catch(error => console.error(error))
-  const syncLink = mobileSyncLink(connection => sync.disconnected(connection))
+  async function diagnoseSync(options) {
+    if (platform === 'android' && Capacitor.isPluginAvailable('MomoSync')) {
+      return (await syncTransport.diagnose(options)).status
+    }
+    if (!native) return null
+    try {
+      const result = await CapacitorHttp.get({
+        url: new URL('/health', options.relay).href, connectTimeout: 5000, readTimeout: 5000, disableRedirects: true,
+      })
+      if (result.status === 200 && result.data?.service === 'momo-sync') return 'websocket_unavailable'
+    } catch {}
+    return 'service_unavailable'
+  }
+  const syncLink = mobileSyncLink(connection => sync.disconnected(connection), diagnoseSync)
   const sync = mobileSync({
     exchange: syncLink.exchange,
     loadCode: () => native ? SecureStorage.getItem('sync-pair').catch(() => null) : Promise.resolve(null),
@@ -246,6 +259,7 @@ export function createMobileBridge() {
     liveScan: native && Capacitor.isPluginAvailable('CapacitorBarcodeScanner'),
     petState: () => petOverlay.state(),
     setPet: enabled => petOverlay.setEnabled({ enabled }),
+    onPetPermissionReturn: callback => petOverlay.addListener('permissionReturn', callback),
     async getState() { await init; return state() },
     onState: callback => { onState = callback },
     onDay: callback => { onDay = callback },
@@ -256,7 +270,10 @@ export function createMobileBridge() {
     pairSync: sync.pairWith,
     testSync: sync.test,
     async scanSyncCode() {
-      if (floatingPet) await petOverlay.scanner({ active: true })
+      if (floatingPet) {
+        await petOverlay.foreground()
+        await petOverlay.scanner({ active: true })
+      }
       try {
         // The scanner's QR_CODE and BACK values select live decoding from the rear camera.
         const result = await barcodeScanner.scanBarcode({
@@ -351,6 +368,7 @@ export function createMobileBridge() {
     async openBrowser(value) {
       const url = webUrl(value)
       if (!native) throw new Error('请在移动安装版中打开网页')
+      if (floatingPet) await petOverlay.foreground()
       browser = { ...browser, url, closed: false }
       onBrowser(browser)
       await InAppBrowser.openInWebView({

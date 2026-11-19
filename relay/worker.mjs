@@ -1,10 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-
-const protocol = 'momo-sync-v1'
-const hexKey = '[a-f0-9]{64}'
-const ownerAuth = new RegExp('^host\\.(' + hexKey + ')\\.(' + hexKey + ')$')
-const peerAuth = new RegExp('^join\\.(' + hexKey + ')$')
-const roomPath = new RegExp('^/v1/(' + hexKey + ')$')
+import { protocol, ownerAuth, peerAuth, roomPath, peerId, health } from './protocol.mjs'
 const encoder = new TextEncoder()
 async function hash(value) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
@@ -14,7 +9,7 @@ async function hash(value) {
 export default {
   fetch(request, env) {
     const pathname = new URL(request.url).pathname
-    if (request.method === 'GET' && pathname === '/health') return Response.json({ service: 'momo-sync', version: 1 })
+    if (request.method === 'GET' && pathname === '/health') return Response.json(health)
     const room = roomPath.exec(pathname)
     if (!room || request.method !== 'GET') return new Response(null, { status: 404 })
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response(null, { status: 426 })
@@ -78,7 +73,7 @@ export class Room extends DurableObject {
     }
     const actor = sender.deserializeAttachment()
     const peer = actor.role === 'host' ? frame.peer : actor.peer
-    if (typeof peer !== 'string' || !/^[0-9a-f-]{36}$/.test(peer)) return
+    if (typeof peer !== 'string' || !peerId.test(peer)) return
     const target = actor.role === 'host' ? this.ctx.getWebSockets(peer)[0] : this.host()
     send(target, { peer, kind: frame.kind, packet: frame.packet })
   }
