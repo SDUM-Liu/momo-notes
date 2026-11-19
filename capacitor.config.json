@@ -1,5 +1,5 @@
 {
-  "appId": "io.github.sdumliu.momonotes",
-  "appName": "桃桃便签",
+  "appId": "io.github.sdumliu.momonotes.preview",
+  "appName": "桃桃便签预览",
   "webDir": "dist"
 }

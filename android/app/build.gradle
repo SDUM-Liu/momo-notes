@@ -7,7 +7,7 @@ android {
     namespace = "io.github.sdumliu.momonotes"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "io.github.sdumliu.momonotes"
+        applicationId "io.github.sdumliu.momonotes.preview"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode versionParts[0] * 1000000 + versionParts[1] * 1000 + versionParts[2]
