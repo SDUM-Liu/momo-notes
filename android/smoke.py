@@ -76,7 +76,11 @@ def main(apk):
                 '-n', PACKAGE + '/.MainActivity'))
     wait_for(lambda: resumed(PACKAGE), bool, 'The app did not reach its foreground activity')
     click('设置')
-    click('在其他应用上显示桌宠')
+    wait_for(hierarchy, lambda root: any(
+        ('在其他应用上显示桌宠' in (item.get('text', '') + ' ' + item.get('content-desc', ''))
+         or item.get('resource-id', '') == 'mobile-pet-enable')
+        and item.get('checked') == 'true' for item in root.iter('node')), 'The desktop pet switch was not enabled by default')
+    click('授予悬浮窗权限')
     wait_for(lambda: resumed('com.android.settings'), bool, 'Overlay settings did not open')
     shell('appops', 'set', PACKAGE, 'SYSTEM_ALERT_WINDOW', 'allow')
     shell('input', 'keyevent', 'KEYCODE_BACK')

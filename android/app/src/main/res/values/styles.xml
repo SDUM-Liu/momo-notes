@@ -20,9 +20,4 @@
         <item name="android:background">@drawable/splash</item>
     </style>
 
-    <style name="AppTheme.NoteWindow" parent="AppTheme.NoActionBar">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:backgroundDimEnabled">false</item>
-    </style>
 </resources>

@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     private static MainActivity current;
     private boolean openFloating;
     private boolean editorResumed;
+    private boolean launcherRequested;
 
     static MainActivity current() { return current; }
     boolean isEditorResumed() { return editorResumed; }
@@ -30,6 +31,7 @@ public class MainActivity extends BridgeActivity {
     public void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         openFloating = PetOverlayService.OPEN_FLOATING_NOTE.equals(intent.getAction());
+        launcherRequested = Intent.ACTION_MAIN.equals(intent.getAction()) && intent.hasCategory(Intent.CATEGORY_LAUNCHER);
     }
 
     @Override
@@ -38,6 +40,10 @@ public class MainActivity extends BridgeActivity {
         PetOverlayService.dismissNote();
         super.onResume();
         PetOverlayService.setEditorVisible(true);
+        if (launcherRequested && getBridge() != null) {
+            launcherRequested = false;
+            getBridge().getWebView().evaluateJavascript("window.dispatchEvent(new Event('momo-launcher-open'))", null);
+        }
         if (openFloating && PetOverlayService.isRunning() && !moveTaskToBack(true)) openFloating = false;
     }
 

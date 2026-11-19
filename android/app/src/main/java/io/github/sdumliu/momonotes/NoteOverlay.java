@@ -112,7 +112,8 @@ final class NoteOverlay {
     }
 
     private void setFloating(boolean active) {
-        webView.evaluateJavascript("document.documentElement.dataset.momoFloating = '" + active + "'", null);
+        webView.evaluateJavascript("document.documentElement.dataset.momoFloating = '" + active + "';"
+            + (active ? "window.dispatchEvent(new Event('momo-floating-open'))" : ""), null);
     }
 
     private int dp(int size) {

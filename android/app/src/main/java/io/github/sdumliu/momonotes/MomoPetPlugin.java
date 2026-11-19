@@ -23,7 +23,8 @@ public class MomoPetPlugin extends Plugin {
             JSObject result = new JSObject();
             boolean permission = Settings.canDrawOverlays(getContext());
             result.put("permission", permission);
-            result.put("enabled", permission && PetOverlayService.isRunning());
+            result.put("enabled", PetOverlayService.wanted(getContext()));
+            result.put("running", permission && PetOverlayService.isRunning());
             result.put("error", startFailure != null ? startFailure : PetOverlayService.failure());
             call.resolve(result);
         });
@@ -38,6 +39,7 @@ public class MomoPetPlugin extends Plugin {
         getActivity().runOnUiThread(() -> {
             try {
                 boolean enabled = call.getBoolean("enabled", false);
+                PetOverlayService.setWanted(getContext(), enabled);
                 Intent service = new Intent(getContext(), PetOverlayService.class);
                 enablingAfterPermission = false;
                 startFailure = null;
@@ -60,6 +62,7 @@ public class MomoPetPlugin extends Plugin {
     }
 
     private void startPet() {
+        if (PetOverlayService.isRunning()) return;
         try {
             ContextCompat.startForegroundService(getActivity(), new Intent(getContext(), PetOverlayService.class));
         } catch (RuntimeException error) {
@@ -70,11 +73,12 @@ public class MomoPetPlugin extends Plugin {
 
     @Override
     protected void handleOnResume() {
+        boolean starting = PetOverlayService.wanted(getContext()) && Settings.canDrawOverlays(getContext());
+        if (starting) startPet();
         if (enablingAfterPermission) {
             enablingAfterPermission = false;
-            if (Settings.canDrawOverlays(getContext())) startPet();
             JSObject result = new JSObject();
-            result.put("starting", Settings.canDrawOverlays(getContext()));
+            result.put("starting", starting);
             notifyListeners("permissionReturn", result);
         }
         if (foregroundCall != null) {

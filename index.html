@@ -88,11 +88,9 @@
     <section id="settings-view" class="view sub-view" hidden>
       <div class="subhead"><h1>设置</h1><button class="quiet back">返回</button></div>
       <form id="settings-form">
-        <div class="project-links">
-          <button id="settings-sync" type="button" class="quiet">设备同步</button>
-          <button id="settings-codex" type="button" class="quiet">主机会话</button>
-          <button id="project-repo" type="button" class="quiet">开源仓库</button>
-          <button id="project-issues" type="button" class="quiet">问题反馈</button>
+        <div class="settings-shortcuts">
+          <button id="settings-sync" type="button" class="quiet"><span data-icon="refresh-cw"></span>设备同步</button>
+          <button id="settings-codex" type="button" class="quiet"><span data-icon="message-circle"></span>主机 Codex</button>
         </div>
         <div class="settings-group desktop-only">
           <label class="switch-row">窗口置顶<input id="pin" type="checkbox" role="switch"></label>
@@ -105,8 +103,9 @@
           </div>
         </div>
         <div id="mobile-pet-settings" class="settings-group" hidden>
-          <label class="switch-row">在其他应用上显示桌宠<input id="mobile-pet-enable" type="checkbox" role="switch"></label>
+          <label class="switch-row">在其他应用上显示桌宠<input id="mobile-pet-enable" type="checkbox" role="switch" aria-label="在其他应用上显示桌宠"></label>
           <p id="mobile-pet-status" role="status"></p>
+          <button id="mobile-pet-permission" class="quiet" type="button" hidden>授予悬浮窗权限</button>
         </div>
         <h2>应用更新</h2>
         <div class="settings-group update-box">
@@ -121,7 +120,7 @@
           后台下载，退出时自动安装<input id="automatic-update" type="checkbox" role="switch">
         </label>
         <button id="installer-settings" type="button" class="quiet desktop-only">下载其他版本</button>
-        <h2>AI 连接</h2>
+        <h2>便签问答 API</h2>
         <p id="mobile-ai-host" hidden>配对后，AI API 由主机调用。</p>
         <fieldset id="api-settings" class="settings-group fields">
           <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>
@@ -130,6 +129,10 @@
           <button id="clear-key" class="quiet" type="button">清除已存密钥</button>
           <label>本地 HTTP 代理端口<input id="proxy" inputmode="numeric" placeholder="留空直连" maxlength="5"></label>
         </fieldset>
+        <div class="settings-links">
+          <button id="project-repo" type="button" class="quiet">开源仓库 ↗</button>
+          <button id="project-issues" type="button" class="quiet">问题反馈 ↗</button>
+        </div>
       </form>
       <div class="subfoot"><span id="settings-status" role="status"></span><button type="submit" form="settings-form" class="primary">保存设置</button></div>
     </section>
@@ -183,10 +186,36 @@
         </form>
       </div>
     </section>
-    <section id="codex-view" class="view sub-view" hidden>
-      <div class="subhead"><h1>主机 Codex</h1><button id="codex-back" class="quiet">返回设置</button></div>
-      <div class="sync-body">
-        <div id="codex-host-config" class="desktop-only">
+    <section id="ai-view" class="view chat-view" hidden>
+      <header class="chat-head">
+        <button id="codex-drawer-toggle" type="button" class="quiet" data-icon="panel-left" aria-label="历史会话" aria-controls="codex-drawer" aria-expanded="false"></button>
+        <h1 id="chat-title">桃桃 AI</h1>
+        <button id="codex-new" type="button" class="quiet" data-icon="square-pen" aria-label="新会话"></button>
+        <button id="ai-back" type="button" class="quiet">返回</button>
+      </header>
+      <div class="chat-modes" aria-label="回答方式">
+        <button id="ai-mode-codex" type="button" aria-pressed="true">Codex</button>
+        <button id="ai-mode-notes" type="button" aria-pressed="false">便签问答</button>
+      </div>
+      <div id="chat-model-bar" class="chat-models">
+        <label>模型<select id="codex-model"><option value="">自动</option></select></label>
+        <label>思考程度<select id="codex-effort"><option value="">自动</option></select></label>
+        <small id="codex-model-status" role="status" hidden></small>
+      </div>
+      <button type="button" id="codex-scrim" aria-label="关闭会话列表" hidden></button>
+      <aside id="codex-drawer" aria-label="历史会话" hidden>
+        <div class="chat-drawer-title"><strong>历史会话</strong>
+          <button id="codex-refresh" type="button" class="quiet">刷新</button>
+          <button id="codex-drawer-close" type="button" class="quiet" data-icon="x" aria-label="关闭会话列表"></button>
+        </div>
+        <form id="codex-search-form">
+          <input id="codex-search" type="search" aria-label="查找会话" maxlength="100" placeholder="搜索标题或项目">
+        </form>
+        <select id="codex-thread" aria-label="主机 Codex 会话" hidden><option value="">新会话</option></select>
+        <div id="codex-thread-list"></div>
+        <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
+        <details id="codex-host-config" class="desktop-only">
+          <summary>主机设置</summary>
           <p id="codex-folder-label"></p>
           <div class="project-links">
             <button id="codex-folder-open" class="quiet" type="button">打开工作目录</button>
@@ -196,50 +225,46 @@
           <label class="switch-row">允许已配对设备使用会话<input id="codex-remote" type="checkbox"></label>
           <label class="switch-row">向已配对设备共享当前账号的所有会话<input id="codex-all" type="checkbox"></label>
           <label class="switch-row">允许在所选目录内写入<input id="codex-write" type="checkbox"></label>
-        </div>
-        <form id="codex-search-form">
-          <label>查找会话<input id="codex-search" type="search" maxlength="100" placeholder="输入会话标题或项目目录"></label>
-        </form>
-        <label>会话<select id="codex-thread" aria-label="主机 Codex 会话"><option value="">新会话</option></select></label>
-        <div class="project-links">
-          <button id="codex-refresh" type="button" class="quiet">刷新</button>
-          <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享给已配对设备</button>
+        </details>
+      </aside>
+      <div id="codex-pane" class="chat-pane">
+        <div id="codex-messages" class="chat-scroll">
+          <p id="codex-empty">给主机 Codex 发一条消息，或从历史中继续会话。</p>
+          <h2 id="codex-conversation-title"></h2>
+          <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享会话</button>
           <button id="codex-older" type="button" class="quiet" hidden>加载更早消息</button>
-          <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
+          <div id="codex-history" aria-label="会话消息"></div>
+          <div id="codex-pending" class="chat-message from-user" hidden></div>
+          <div id="codex-output" class="chat-message" hidden></div>
+          <details id="codex-log" hidden><summary>命令输出</summary><pre></pre></details>
         </div>
-        <div id="codex-history" aria-label="会话消息"></div>
-        <form id="codex-form">
-          <label>模型<select id="codex-model"><option value="">沿用会话或主机默认</option></select></label>
-          <small id="codex-model-status" role="status" hidden></small>
-          <label>给主机的任务<textarea id="codex-prompt" required maxlength="12000"></textarea></label>
-          <div class="project-links">
-            <button id="codex-send" type="submit" class="primary">发送任务</button>
-            <button id="codex-stop" type="button" class="quiet" hidden>停止</button>
+        <p id="codex-status" class="chat-status" role="status"></p>
+        <form id="codex-form" class="chat-composer">
+          <textarea id="codex-prompt" rows="2" required maxlength="12000" aria-label="消息" placeholder="给主机 Codex 发消息"></textarea>
+          <button id="codex-send" type="submit" class="chat-send" data-icon="arrow-up" aria-label="发送"></button>
+          <button id="codex-stop" type="button" class="chat-send" data-icon="square" aria-label="停止" hidden></button>
+        </form>
+      </div>
+      <div id="note-ai-pane" class="chat-pane" hidden>
+        <div class="chat-scroll">
+          <div id="note-question" class="chat-message from-user" hidden></div>
+          <div id="answer" class="chat-message" role="status" hidden></div>
+        </div>
+        <form id="ai-form">
+          <details class="note-query-options"><summary>便签范围与回答方式</summary>
+            <div class="ai-scope">
+              <label>日期<select id="scope"><option value="auto">按问题识别</option><option value="current">当前日期</option><option value="history">全部日期</option></select></label>
+              <label>分类<select id="category-scope"><option value="auto">按问题识别</option><option value="current">当前分类</option><option value="all">全部分类</option></select></label>
+              <label>回答方式<select id="ai-provider"><option value="codex">主机 Codex</option><option value="api">已配置的 API</option></select></label>
+            </div>
+          </details>
+          <div class="chat-composer">
+            <textarea id="prompt" rows="2" maxlength="4000" aria-label="便签问题" placeholder="例如，今天的待办还有哪些没做？" required></textarea>
+            <button id="send-question" type="submit" class="chat-send" data-icon="arrow-up" aria-label="发送"></button>
+            <button id="ai-cancel" type="button" class="chat-send" data-icon="square" aria-label="停止" hidden></button>
           </div>
         </form>
-        <p id="codex-status" role="status"></p>
-        <div id="codex-output" class="answer" hidden></div>
-        <details id="codex-log" hidden><summary>命令输出</summary><pre></pre></details>
       </div>
-    </section>
-    <section id="ai-view" class="view sub-view" hidden>
-      <div class="subhead"><h1>问便签 AI</h1><button class="quiet back">返回</button></div>
-      <form id="ai-form">
-        <label>回答方式<select id="ai-provider"><option value="codex">主机 Codex</option><option value="api">已配置的 API</option></select></label>
-        <div id="ai-codex-options">
-          <label>模型<select id="ai-codex-model"><option value="">主机默认</option></select></label>
-          <small id="ai-codex-model-status" role="status" hidden></small>
-        </div>
-        <div class="ai-scope">
-          <label>日期<select id="scope"><option value="auto">按问题识别</option><option value="current">当前日期</option><option value="history">全部日期</option></select></label>
-          <label>分类<select id="category-scope"><option value="auto">按问题识别</option><option value="current">当前分类</option><option value="all">全部分类</option></select></label>
-        </div>
-        <label for="prompt">你的问题</label>
-        <textarea id="prompt" maxlength="2000" placeholder="例如，还有哪些事情没做？" required></textarea>
-        <button id="send-question" type="submit" class="primary">发送</button>
-        <button id="ai-cancel" type="button" class="quiet" hidden>停止 Codex</button>
-        <div id="answer" class="answer" role="status" hidden></div>
-      </form>
     </section>
   </main>
   <script type="module" src="/src/app.js"></script>

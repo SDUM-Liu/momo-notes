@@ -16,26 +16,46 @@ export async function followCodex(api, job, draw, current = () => true) {
   return job
 }
 
-export function wireModelPicker(api, select, status, errorMessage) {
+function wireModelPicker(api, select, effort, status, errorMessage) {
   const label = select.options[0].text
   const key = 'momo.model.' + select.id
-  let preferred = ''
-  let loading
-  try { preferred = localStorage.getItem(key) || '' } catch {}
+  const effortKey = 'momo.effort.' + select.id
+  const labels = { none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' }
+  let preferred = '', preferredEffort = '', catalog = [], loading
+  try {
+    preferred = localStorage.getItem(key) || ''
+    preferredEffort = localStorage.getItem(effortKey) || ''
+  } catch {}
+  function drawEfforts() {
+    const model = catalog.find(item => item.id === select.value) || catalog.find(item => item.isDefault)
+    const options = model?.efforts ?? []
+    const automatic = model?.defaultEffort ? '自动 · ' + (labels[model.defaultEffort] ?? model.defaultEffort) : '自动'
+    effort.replaceChildren(new Option(automatic, ''), ...options.map(value => new Option(labels[value] ?? value, value)))
+    effort.disabled = options.length === 0
+    if (options.includes(preferredEffort)) effort.value = preferredEffort
+  }
   select.onchange = () => {
     preferred = select.value
     try { localStorage.setItem(key, preferred) } catch {}
+    drawEfforts()
   }
+  effort.onchange = () => {
+    preferredEffort = effort.value
+    try { localStorage.setItem(effortKey, preferredEffort) } catch {}
+  }
+  drawEfforts()
   function load() {
     if (!loading) {
       status.hidden = true
       loading = api.codex('models').then(models => {
+        catalog = models
         select.replaceChildren(new Option(label, ''), ...models.map(item => new Option(item.label, item.id)))
         if (models.some(item => item.id === preferred)) select.value = preferred
         else if (preferred) {
           status.textContent = '上次选择的模型目前不可用，已选用默认项。'
           status.hidden = false
         }
+        drawEfforts()
       }).catch(error => {
         status.textContent = '模型列表加载失败，可使用当前选项。' + errorMessage(error)
         status.hidden = false
@@ -43,17 +63,29 @@ export function wireModelPicker(api, select, status, errorMessage) {
     }
     return loading
   }
-  return { load, value: () => select.value }
+  return { load, options: () => ({ model: select.value, effort: effort.value }) }
 }
 
-export function wireCodex(api, showView, errorMessage) {
+export function wireCodex(api, errorMessage, routeToNotes) {
   const $ = id => document.getElementById(id)
   const select = $('codex-thread')
-  const model = wireModelPicker(api, $('codex-model'), $('codex-model-status'), errorMessage)
+  const model = wireModelPicker(api, $('codex-model'), $('codex-effort'), $('codex-model-status'), errorMessage)
   let config, threads = [], cursor, history = [], currentJob, listCursor
   let watching = false
   let request = 0
   let scope = 0
+  let listRequest = 0
+  const scroll = $('codex-messages')
+  const promptBox = $('codex-prompt')
+  const bottom = () => { scroll.scrollTop = scroll.scrollHeight }
+
+  function drawer(open) {
+    $('codex-drawer').hidden = $('codex-scrim').hidden = !open
+    $('codex-drawer-toggle').setAttribute('aria-expanded', String(open))
+  }
+
+  for (const id of ['codex-drawer-close', 'codex-scrim']) $(id).onclick = () => drawer(false)
+  $('codex-drawer-toggle').onclick = () => drawer($('codex-drawer').hidden)
 
   async function action(work) {
     try { return await work() } catch (error) { $('codex-status').textContent = errorMessage(error) }
@@ -66,24 +98,54 @@ export function wireCodex(api, showView, errorMessage) {
     $('codex-remote').checked = value.enabled
     $('codex-all').checked = value.shareAll
     $('codex-write').checked = value.write
+    if (value.shareAll) $('codex-share').hidden = true
   }
 
   function renderHistory() {
     $('codex-history').replaceChildren(...history.map(message => {
       const row = document.createElement('div')
-      row.className = 'answer'
+      row.className = 'chat-message' + (message.role === '你' ? ' from-user' : '')
       const role = document.createElement('strong')
       role.textContent = message.role
       row.append(role, document.createTextNode(message.text))
       return row
     }))
     $('codex-older').hidden = !cursor
+    $('codex-empty').hidden = Boolean(select.value || history.length || currentJob)
+    $('codex-conversation-title').textContent = threads.find(item => item.id === select.value)?.title || ''
+  }
+
+  function renderThreads() {
+    $('codex-thread-list').replaceChildren(...threads.map(item => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.disabled = watching
+      button.setAttribute('aria-pressed', String(item.id === select.value))
+      const title = document.createElement('strong')
+      title.textContent = item.title
+      const details = document.createElement('small')
+      details.textContent = [item.cwd?.split(/[\\/]/).filter(Boolean).at(-1),
+        item.archived && '已归档', item.shared && !api.mobile && '已共享'].filter(Boolean).join(' · ')
+      button.append(title, details)
+      button.onclick = () => {
+        select.value = item.id
+        drawer(false)
+        void action(() => read())
+      }
+      return button
+    }))
+  }
+
+  function clearOutput() {
+    currentJob = undefined
+    $('codex-pending').hidden = $('codex-output').hidden = $('codex-log').hidden = true
   }
 
   async function read(older = false) {
     const id = select.value
     const version = ++request
-    if (!older) { cursor = undefined; history = []; renderHistory() }
+    const previousHeight = scroll.scrollHeight
+    if (!older) { clearOutput(); cursor = undefined; history = []; renderHistory(); renderThreads() }
     const selected = threads.find(item => item.id === id)
     $('codex-share').hidden = api.mobile || !selected || config?.shareAll
     if (selected) $('codex-share').textContent = selected.shared ? '取消共享' : '共享给已配对设备'
@@ -93,12 +155,14 @@ export function wireCodex(api, showView, errorMessage) {
     cursor = result.cursor
     history = [...result.messages, ...history]
     renderHistory()
+    if (older) scroll.scrollTop += scroll.scrollHeight - previousHeight
+    else bottom()
   }
 
   async function load(preferred = select.value, more = false, refresh = false) {
-    const before = scope
+    const before = ++listRequest
     const result = await api.codex('list', { search: $('codex-search').value, cursor: more ? listCursor : null, refresh })
-    if (before !== scope) return
+    if (before !== listRequest) return
     threads = more ? [...threads, ...result.threads] : result.threads
     listCursor = result.cursor
     $('codex-more').hidden = listCursor === null
@@ -107,49 +171,74 @@ export function wireCodex(api, showView, errorMessage) {
       const details = [folder, item.archived ? '已归档' : '', item.shared && !api.mobile ? '已共享' : ''].filter(Boolean)
       return new Option([item.title, ...details].join(' · '), item.id)
     }))
-    if (threads.some(item => item.id === preferred)) select.value = preferred
-    await read()
+    if (preferred && !threads.some(item => item.id === preferred)) select.add(new Option('当前会话', preferred))
+    select.value = preferred
+    renderThreads()
+    if (!more) await read()
   }
 
   async function observe(started) {
     const before = scope
     watching = true
     $('codex-send').disabled = true
+    $('codex-new').disabled = true
     select.disabled = true
+    renderThreads()
     try {
       const job = await started()
       if (!job || before !== scope) return
+      if (job.threadId && job.threadId !== select.value) {
+        if (!Array.from(select.options).some(option => option.value === job.threadId)) {
+          select.add(new Option('当前会话', job.threadId))
+        }
+        select.value = job.threadId
+        await read()
+        if (before !== scope) return
+      }
       const result = await followCodex(api, job, draw, () => before === scope)
       if (!result || before !== scope) return
       if (result.status === 'completed') {
-        $('codex-prompt').value = ''
         await load(result.threadId)
-        $('codex-output').hidden = !result.output || history.some(item => item.role === 'Codex')
+        if (before !== scope) return
+        if (result.output && !history.some(item => item.role === 'Codex' && item.text.includes(result.output))) draw(result)
       }
+      return result
     } finally {
       if (before === scope) {
         watching = false
         $('codex-send').disabled = false
+        $('codex-new').disabled = false
         select.disabled = false
         $('codex-stop').hidden = true
+        renderThreads()
       }
     }
   }
 
   async function refresh() {
+    if (watching) return model.load()
     $('codex-status').textContent = ''
     await Promise.all([load(select.value, false, true), model.load()])
     if (!watching) await observe(() => api.codex('active'))
   }
 
-  $('settings-codex').onclick = () => {
-    showView('codex')
+  function open(showSettings = false) {
+    if (showSettings) {
+      drawer(true)
+      if (!api.mobile) $('codex-host-config').open = true
+    }
     void action(async () => {
-      if (!api.mobile) drawConfig(await api.codexSettings())
-      await refresh()
+      await Promise.all([refresh(), !api.mobile && api.codexSettings().then(drawConfig)])
     })
   }
-  $('codex-back').onclick = () => showView('settings')
+  $('codex-new').onclick = () => {
+    select.value = ''
+    promptBox.value = ''
+    $('codex-status').textContent = ''
+    drawer(false)
+    void action(() => read())
+    promptBox.focus()
+  }
   if (!api.mobile) {
     for (const [button, operation] of [
       ['codex-folder', 'choose'], ['codex-folder-reset', 'reset'], ['codex-folder-open', 'open'],
@@ -186,12 +275,12 @@ export function wireCodex(api, showView, errorMessage) {
   }
 
   $('codex-refresh').onclick = () => action(refresh)
-  $('codex-more').onclick = () => action(() => load(select.value, true))
+  $('codex-more').onclick = () => { if (!watching) void action(() => load(select.value, true)) }
   $('codex-search-form').onsubmit = event => {
     event.preventDefault()
-    void action(() => load(''))
+    if (!watching) void action(() => load(select.value))
   }
-  $('codex-search').onchange = () => action(() => load(''))
+  $('codex-search').onchange = () => { if (!watching) void action(() => load(select.value)) }
   $('codex-older').onclick = () => action(() => read(true))
   select.onchange = () => action(() => read())
   $('codex-stop').onclick = () => action(async () => {
@@ -202,28 +291,55 @@ export function wireCodex(api, showView, errorMessage) {
     currentJob = job
     $('codex-output').textContent = job.output
     $('codex-output').hidden = !job.output
+    $('codex-pending').textContent = job.prompt || ''
+    $('codex-pending').hidden = !job.prompt
+    $('codex-empty').hidden = true
     $('codex-log').querySelector('pre').textContent = job.log
     $('codex-log').hidden = !job.log
     $('codex-stop').hidden = job.status !== 'running' || !job.turnId
     $('codex-status').textContent = job.status === 'running'
       ? job.retrying ? '主机正在重新连接 Codex…' : '主机正在处理。若需要额外权限，请在主机确认。'
       : job.status === 'interrupted' ? '已停止' : job.status === 'failed' ? job.error : '已完成'
+    bottom()
   }
 
   $('codex-form').onsubmit = event => {
     event.preventDefault()
     if (watching) return
-    void action(() => {
+    const prompt = promptBox.value.trim()
+    if (!prompt || (!select.value && routeToNotes(prompt))) {
+      if (prompt) promptBox.value = ''
+      return
+    }
+    const before = scope
+    void action(async () => {
       $('codex-status').textContent = '正在连接主机…'
-      return observe(() => api.codex('send', {
-        id: select.value || null, prompt: $('codex-prompt').value, model: model.value(),
-      }))
+      try {
+        const result = await observe(async () => {
+          const job = await api.codex('send', { id: select.value || null, prompt, ...model.options() })
+          if (before === scope && promptBox.value.trim() === prompt) promptBox.value = ''
+          return job
+        })
+        if (result?.status === 'failed' && before === scope && !promptBox.value) promptBox.value = prompt
+      } catch (error) {
+        if (before !== scope) return
+        if (!promptBox.value) promptBox.value = prompt
+        throw error
+      }
     })
   }
+  promptBox.onkeydown = event => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault()
+      $('codex-form').requestSubmit()
+    }
+  }
   return {
+    open, model, drawer,
     reset() {
       ++scope
       ++request
+      ++listRequest
       threads = []
       history = []
       cursor = listCursor = currentJob = undefined
@@ -231,10 +347,14 @@ export function wireCodex(api, showView, errorMessage) {
       select.replaceChildren(new Option('新会话', ''))
       select.disabled = false
       $('codex-send').disabled = false
+      $('codex-new').disabled = false
       $('codex-stop').hidden = $('codex-output').hidden = $('codex-log').hidden = $('codex-more').hidden = true
       $('codex-search').value = $('codex-prompt').value = ''
       $('codex-status').textContent = $('codex-output').textContent = $('codex-log').querySelector('pre').textContent = ''
       renderHistory()
+      clearOutput()
+      renderThreads()
+      drawer(false)
     },
   }
 }

@@ -8,7 +8,7 @@ import { linkOrNull, webUrl } from '../shared/links.mjs'
 import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
 import { parsePairing } from '../shared/sync.mjs'
 import { hostSyncLink } from './rtc-sync.js'
-import { followCodex, wireCodex, wireModelPicker } from './codex-view.js'
+import { followCodex, wireCodex } from './codex-view.js'
 import { wireInstallerDownloads } from './installers-view.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
@@ -21,7 +21,7 @@ if (api.mobile) {
   document.body.dataset.mobileOs = api.platform
 }
 const $ = id => document.getElementById(id)
-const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,globe,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,link,image,table-2}.svg', {
+const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,globe,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,link,image,table-2,panel-left,square-pen,x,arrow-up,square,refresh-cw,message-circle}.svg', {
   query: '?raw', import: 'default', eager: true,
 })
 for (const button of document.querySelectorAll('[data-icon]')) {
@@ -67,7 +67,7 @@ function showView(next) {
     $('sync-pair-code').value = ''
   }
   view = next
-  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync', 'codex', 'installers']) {
+  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync', 'installers']) {
     $(name + '-view').hidden = name !== next
   }
   $('history').classList.toggle('active', next === 'history')
@@ -289,6 +289,9 @@ async function dismissMobile() {
 }
 $('mobile-dismiss').onclick = dismissMobile
 $('mobile-open').onclick = () => api.toggle()
+for (const event of ['momo-floating-open', 'momo-launcher-open']) {
+  window.addEventListener(event, () => { if (state?.mode === 'note') showView('note') })
+}
 wireDrag($('title-drag'))
 $('return-today').onclick = () => loadNote()
 $('reload-shared-note').onclick = async () => {
@@ -591,13 +594,14 @@ async function refreshMobilePet(wanted) {
   region.hidden = false
   try {
     let pet = await api.petState()
-    for (let attempt = 0; attempt < 12 && pet.permission && !pet.error && wanted !== undefined && pet.enabled !== wanted; attempt++) {
+    for (let attempt = 0; attempt < 12 && pet.permission && !pet.error && wanted !== undefined && pet.running !== wanted; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 200))
       pet = await api.petState()
     }
     $('mobile-pet-enable').checked = pet.enabled
+    $('mobile-pet-permission').hidden = pet.permission || !pet.enabled
     description.textContent = pet.error || (pet.permission
-      ? (pet.enabled ? '点悬浮桌宠打开便签，拖动便签顶部可移动小窗。'
+      ? (pet.running ? '点悬浮桌宠打开便签，拖动便签顶部可移动小窗。'
         : wanted ? '系统已授予悬浮窗权限，但桌宠服务还未启动。请重新开启。' : '开启后可拖动桌宠，点它打开便签。')
       : '请在系统列表中选择桃桃便签，允许「显示在其他应用上层」后返回。')
   } catch (error) {
@@ -618,6 +622,9 @@ $('mobile-pet-enable').onchange = async event => {
     input.disabled = false
   }
 }
+$('mobile-pet-permission').onclick = () => api.setPet(true).catch(error => {
+  $('mobile-pet-status').textContent = errorMessage(error)
+})
 if (api.floatingPet) {
   void api.onPetPermissionReturn?.(({ starting }) => refreshMobilePet(starting || undefined))
   document.addEventListener('visibilitychange', () => {
@@ -843,17 +850,28 @@ $('settings-form').onsubmit = async event => {
   }
 }
 
-const noteModel = wireModelPicker(api, $('ai-codex-model'), $('ai-codex-model-status'), errorMessage)
-function refreshNoteModels() {
-  const codex = $('ai-provider').value === 'codex'
-  $('ai-codex-options').hidden = !codex
-  if (codex) void noteModel.load()
+let chatBack = 'note'
+function chatMode(notes) {
+  $('ai-mode-codex').setAttribute('aria-pressed', String(!notes))
+  $('ai-mode-notes').setAttribute('aria-pressed', String(notes))
+  $('codex-pane').hidden = notes
+  $('note-ai-pane').hidden = !notes
+  $('codex-drawer-toggle').hidden = $('codex-new').hidden = notes
+  $('chat-model-bar').hidden = notes && $('ai-provider').value === 'api'
+  if (notes) codexView.drawer(false)
 }
-$('question').onclick = () => {
-  showView(view === 'ai' ? 'note' : 'ai')
-  if (view === 'ai') refreshNoteModels()
+function openChat(back) {
+  chatBack = back
+  chatMode(false)
+  codexView.drawer(false)
+  showView('ai')
+  codexView.open(back === 'settings')
 }
-$('ai-provider').onchange = refreshNoteModels
+$('question').onclick = () => view === 'ai' ? showView('note') : openChat('note')
+$('settings-codex').onclick = () => openChat('settings')
+$('ai-back').onclick = () => showView(chatBack)
+$('ai-mode-codex').onclick = () => chatMode(false)
+$('ai-mode-notes').onclick = $('ai-provider').onchange = () => chatMode(true)
 const questionRequest = () => ({
   question: $('prompt').value.trim(), scope: $('scope').value, date: currentDate,
   category, categoryScope: $('category-scope').value,
@@ -861,7 +879,20 @@ const questionRequest = () => ({
 for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'issues']]) {
   $(button).onclick = () => api.openProject(target).catch(error => noteStatus(errorMessage(error), true))
 }
-const codexView = wireCodex(api, showView, errorMessage)
+const codexView = wireCodex(api, errorMessage, prompt => {
+  const explicit = prompt.startsWith('$momo-notes-query')
+  const noteLookup = /我的便签|便签[里中上]|所有便签|全部便签|(?:今天|昨天|前天|本周|上周)的?待办/.test(prompt)
+    && /什么|哪些|多少|有没有|还有|总结|汇总|列出|查找|查看|告诉我|是否/.test(prompt)
+  if (!explicit && !noteLookup) return false
+  const question = prompt.replace(/^\$momo-notes-query\s*/, '').trim()
+  if (!question || question.length > 4000 || $('send-question').disabled) return false
+  $('ai-provider').value = 'codex'
+  $('scope').value = $('category-scope').value = 'auto'
+  $('prompt').value = question
+  chatMode(true)
+  $('ai-form').requestSubmit()
+  return true
+})
 if (!api.mobile) wireInstallerDownloads(api, showView, errorMessage)
 let noteJob
 let profileRevision = 0
@@ -878,6 +909,8 @@ $('ai-form').onsubmit = async event => {
   const send = $('send-question')
   const profile = profileRevision
   send.disabled = true
+  $('note-question').textContent = question
+  $('note-question').hidden = false
   answer.hidden = false
   answer.classList.remove('error')
   answer.textContent = '正在读取便签并生成回答…'
@@ -888,7 +921,7 @@ $('ai-form').onsubmit = async event => {
       if (profile === profileRevision) answer.textContent = response
     }
     else {
-      const started = await api.codex('notes', { ...questionRequest(), model: noteModel.value() })
+      const started = await api.codex('notes', { ...questionRequest(), ...codexView.model.options() })
       if (profile !== profileRevision) return
       const completed = await followCodex(api, started, job => {
         noteJob = job
@@ -973,6 +1006,8 @@ async function init() {
       previousSaveError = retryOnUnlock = false
       noteJob = undefined
       $('prompt').value = ''
+      $('note-question').textContent = ''
+      $('note-question').hidden = true
       $('answer').textContent = ''
       $('answer').hidden = $('ai-cancel').hidden = true
       $('send-question').disabled = false

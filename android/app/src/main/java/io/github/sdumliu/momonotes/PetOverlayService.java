@@ -41,6 +41,13 @@ public class PetOverlayService extends Service {
     private WindowManager.LayoutParams position;
 
     static boolean isRunning() { return running != null; }
+    static boolean wanted(Context context) {
+        return context.getSharedPreferences("pet-overlay", MODE_PRIVATE).getBoolean("enabled", true);
+    }
+
+    static void setWanted(Context context, boolean wanted) {
+        context.getSharedPreferences("pet-overlay", MODE_PRIVATE).edit().putBoolean("enabled", wanted).apply();
+    }
     static String failure() { return failure; }
     static void clearFailure() { failure = null; }
 
@@ -77,7 +84,8 @@ public class PetOverlayService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if ((intent != null && STOP.equals(intent.getAction())) || !Settings.canDrawOverlays(this)) {
+        if (intent != null && STOP.equals(intent.getAction())) setWanted(this, false);
+        if (!wanted(this) || !Settings.canDrawOverlays(this)) {
             stopSelf();
             return START_NOT_STICKY;
         }
