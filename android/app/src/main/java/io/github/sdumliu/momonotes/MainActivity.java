@@ -25,4 +25,10 @@ public class MainActivity extends BridgeActivity {
         PetOverlayService.setEditorVisible(false);
         super.onPause();
     }
+
+    @Override
+    public void onDestroy() {
+        PetOverlayService.setScannerVisible(false);
+        super.onDestroy();
+    }
 }

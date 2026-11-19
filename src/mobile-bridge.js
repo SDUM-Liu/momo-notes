@@ -12,6 +12,7 @@ const noop = () => {}
 const proxy = registerPlugin('MomoProxy')
 const syncTransport = registerPlugin('MomoSync')
 const petOverlay = registerPlugin('MomoPet')
+const barcodeScanner = registerPlugin('CapacitorBarcodeScanner')
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -220,6 +221,7 @@ export function createMobileBridge() {
     mobile: true,
     platform,
     floatingPet,
+    liveScan: native && Capacitor.isPluginAvailable('CapacitorBarcodeScanner'),
     petState: () => petOverlay.state(),
     setPet: enabled => petOverlay.setEnabled({ enabled }),
     async getState() { await init; return state() },
@@ -231,6 +233,21 @@ export function createMobileBridge() {
     syncState: sync.state,
     pairSync: sync.pairWith,
     testSync: sync.test,
+    async scanSyncCode() {
+      if (floatingPet) await petOverlay.scanner({ active: true })
+      try {
+        // The scanner's QR_CODE and BACK values select live decoding from the rear camera.
+        const result = await barcodeScanner.scanBarcode({
+          hint: 0, cameraDirection: 1, scanInstructions: '将主机配对二维码放入取景框',
+          cancelButtonAccessibilityLabel: '关闭扫码',
+          torchButtonOnAccessibilityLabel: '关闭补光灯',
+          torchButtonOffAccessibilityLabel: '开启补光灯',
+        })
+        return result.ScanResult
+      } finally {
+        if (floatingPet) await petOverlay.scanner({ active: false }).catch(noop)
+      }
+    },
     unpairSync: sync.unpair,
     runSync: sync.run,
     codex: sync.codex,

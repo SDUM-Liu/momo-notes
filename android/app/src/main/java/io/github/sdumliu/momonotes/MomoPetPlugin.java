@@ -55,4 +55,13 @@ public class MomoPetPlugin extends Plugin {
             call.resolve();
         });
     }
+
+    @PluginMethod
+    public void scanner(PluginCall call) {
+        if (getActivity() == null) { call.resolve(); return; }
+        getActivity().runOnUiThread(() -> {
+            PetOverlayService.setScannerVisible(call.getBoolean("active", false));
+            call.resolve();
+        });
+    }
 }

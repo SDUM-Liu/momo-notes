@@ -28,6 +28,7 @@ public class PetOverlayService extends Service {
     private static final String STOP = "io.github.sdumliu.momonotes.STOP_PET";
     private static volatile PetOverlayService running;
     private static boolean editorVisible;
+    private static boolean scannerVisible;
     private WindowManager windows;
     private ImageButton pet;
     private WindowManager.LayoutParams position;
@@ -36,7 +37,16 @@ public class PetOverlayService extends Service {
 
     static void setEditorVisible(boolean visible) {
         editorVisible = visible;
-        if (running != null && running.pet != null) running.pet.setVisibility(visible ? View.GONE : View.VISIBLE);
+        if (running != null) running.refreshVisibility();
+    }
+
+    static void setScannerVisible(boolean visible) {
+        scannerVisible = visible;
+        if (running != null) running.refreshVisibility();
+    }
+
+    private void refreshVisibility() {
+        if (pet != null) pet.setVisibility(editorVisible || scannerVisible ? View.GONE : View.VISIBLE);
     }
 
     @Override
@@ -134,7 +144,7 @@ public class PetOverlayService extends Service {
                 }
             }
         });
-        pet.setVisibility(editorVisible ? View.GONE : View.VISIBLE);
+        refreshVisibility();
         windows.addView(pet, position);
     }
 

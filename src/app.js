@@ -6,6 +6,7 @@ import { Image } from '@tiptap/extension-image'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { linkOrNull, webUrl } from '../shared/links.mjs'
 import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
+import { parsePairing } from '../shared/sync.mjs'
 import { followCodex, wireCodex, wireModelPicker } from './codex-view.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
@@ -684,6 +685,28 @@ $('sync-mobile').onsubmit = event => {
     return result
   }, $('sync-pair'))
 }
+
+function fillScannedPairing(data) {
+  try { parsePairing(data) } catch { throw new Error('这张二维码不是可用的桃桃主机配对码') }
+  $('sync-pair-code').value = data.trim()
+  $('sync-test-status').textContent = '已识别配对码，可以测试连接或开始同步。'
+}
+
+$('sync-camera').hidden = !api.liveScan
+$('sync-camera').onclick = async event => {
+  const button = event.currentTarget
+  button.disabled = true
+  try {
+    const data = await api.scanSyncCode()
+    if (view === 'sync' && data) fillScannedPairing(data)
+  } catch (error) {
+    if (view !== 'sync' || error?.code === 'OS-PLUG-BARC-0006') return
+    $('sync-test-status').textContent = error?.code === 'OS-PLUG-BARC-0007'
+      ? '请在系统设置中允许桃桃便签使用相机，再重试。' : errorMessage(error)
+  } finally {
+    button.disabled = false
+  }
+}
 $('sync-photo').onchange = async event => {
   const [file] = event.target.files
   event.target.value = ''
@@ -703,7 +726,7 @@ $('sync-photo').onchange = async event => {
     const { default: scan } = await import('jsqr')
     const result = scan(pixels.data, pixels.width, pixels.height)
     if (!result) throw new Error('未识别到二维码，请让二维码充满画面或粘贴配对码')
-    $('sync-pair-code').value = result.data
+    fillScannedPairing(result.data)
   } catch (error) {
     $('sync-status').textContent = errorMessage(error)
   }

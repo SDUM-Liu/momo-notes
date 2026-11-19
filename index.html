@@ -146,7 +146,8 @@
         </div>
         <form id="sync-mobile" hidden>
           <label>主机配对码<input id="sync-pair-code" placeholder="粘贴配对码或识别二维码" autocomplete="off" maxlength="100" required></label>
-          <label class="quiet qr-picker">识别二维码<input id="sync-photo" type="file" accept="image/*" capture="environment"></label>
+          <button id="sync-camera" type="button" class="quiet" hidden>相机扫码</button>
+          <label class="quiet qr-picker">从相册识别<input id="sync-photo" type="file" accept="image/*"></label>
           <button id="sync-test" class="quiet" type="button">测试连接</button>
           <button id="sync-pair" class="primary" type="submit">配对并同步</button>
           <p id="sync-test-status" role="status"></p>
