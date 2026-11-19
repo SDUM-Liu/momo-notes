@@ -1,1 +1,4 @@
-{ "url": "https://momo-notes-relay.spiral-poppyseed.workers.dev" }
+{
+  "url": "https://momo-notes-sync-sg.onrender.com",
+  "fallback": "https://momo-notes-relay.spiral-poppyseed.workers.dev"
+}

@@ -29,9 +29,9 @@ export function joinToken(key) {
 }
 
 export function pairingCode(relay, room, key, fallback, backupRoom) {
-  const version = fallback ? 'momo3:' : 'momo2:'
-  const data = fallback ? [[relay, fallback], room, key, backupRoom] : [relay, room, key]
-  return version + btoa(JSON.stringify(data)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+  const data = fallback ? [relay, room, key, fallback, backupRoom] : [relay, room, key]
+  const payload = btoa(JSON.stringify(data)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+  return (payload.length + 6 <= 480 ? 'momo2:' : 'momo3:') + payload
 }
 
 export function parsePairing(value) {
@@ -39,14 +39,15 @@ export function parsePairing(value) {
   if (code.startsWith('momo1:')) throw new Error('这是旧版配对码，请在新版主机重新生成二维码')
   if (code.length <= maxPairingLength && /^momo[23]:[\w-]+$/.test(code)) {
     try {
-      const [routes, room, key, backupRoom] = JSON.parse(atob(code.slice(6).replaceAll('-', '+').replaceAll('_', '/')))
-      if (typeof room !== 'string' || typeof key !== 'string' || !roomPattern.test(room) || !roomPattern.test(key)) throw new Error()
-      if (code.startsWith('momo2:') && typeof routes === 'string') return { relay: relayOrigin(routes), room, key }
-      if (code.startsWith('momo3:') && Array.isArray(routes) && routes.length === 2 && routes.every(url => typeof url === 'string')) {
-        const [relay, fallback] = routes.map(relayOrigin)
-        if (relay !== fallback && typeof backupRoom === 'string' && roomPattern.test(backupRoom) && backupRoom !== room) {
-          return { relay, fallback, room, backupRoom, key }
-        }
+      const [target, room, key, backup, backupRoom] = JSON.parse(atob(code.slice(6).replaceAll('-', '+').replaceAll('_', '/')))
+      if (typeof target !== 'string' || typeof room !== 'string' || typeof key !== 'string' ||
+          !roomPattern.test(room) || !roomPattern.test(key)) throw new Error()
+      const relay = relayOrigin(target)
+      if (backup === undefined && backupRoom === undefined) return { relay, room, key }
+      if (typeof backup !== 'string') throw new Error()
+      const fallback = relayOrigin(backup)
+      if (relay !== fallback && typeof backupRoom === 'string' && roomPattern.test(backupRoom) && backupRoom !== room) {
+        return { relay, fallback, room, backupRoom, key }
       }
     } catch {}
   }
