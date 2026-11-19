@@ -1,4 +1,13 @@
-import { parsePairing, seal, unseal, wireLimit } from '../shared/sync.mjs'
+import { parsePairing, seal, unseal, wireLimit, tailscaleAddress, syncPort } from '../shared/sync.mjs'
+
+function connectionError(host, error) {
+  if (error.code === 'SYNC_LOCAL_NETWORK') return error
+  const address = host + ':' + syncPort
+  if (error.code === 'SYNC_AUTH') return new Error('已连到 ' + address + '，但主机未接受配对。请从当前主机重新复制完整配对码，并检查两端的系统时间。')
+  const network = tailscaleAddress(host) ? '确认两端的 Tailscale 都在线、属于同一网络，且允许访问主机。'
+    : '确认两端在同一局域网。若手机不在该网络，请使用主机生成的 Tailscale 配对码。'
+  return new Error('无法连接 ' + address + '。请确认主机同步已开启、系统防火墙允许连接。' + network)
+}
 
 export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, markForUpload, keepDraft, change }) {
   let pair, running, probing, peerLocked = true, last = '', error = ''
@@ -9,8 +18,12 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     const id = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
     const message = seal(connection.key, 'request', { id, time: Date.now(), op, payload, token })
     if (message.length > wireLimit) throw new Error('便签超出单页同步上限')
-    const reply = await exchange({ host: connection.host, message })
-    const response = unseal(connection.key, 'reply/' + id, reply.message)
+    let reply
+    try { reply = await exchange({ host: connection.host, message }) } catch (error) { throw connectionError(connection.host, error) }
+    let response
+    try { response = unseal(connection.key, 'reply/' + id, reply.message) } catch {
+      throw connectionError(connection.host, { code: 'SYNC_AUTH' })
+    }
     if (!response.ok) throw Object.assign(new Error(response.error), { code: response.code })
     return response.value
   }
@@ -114,6 +127,12 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     state,
     run,
     probe,
+    async test(code) {
+      const connection = String(code ?? '').trim() ? parsePairing(code) : pair
+      if (!connection) throw new Error('请先输入主机配对码')
+      await request(connection, 'state')
+      return connection.host
+    },
     async edit(payload) {
       if (state().locked) throw new Error('同步中或主机未连接，当前修改暂未保存')
       try {

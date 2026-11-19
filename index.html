@@ -7,9 +7,10 @@
   <title>桃桃便签</title>
 </head>
 <body>
+  <button id="mobile-dismiss" type="button" aria-label="收起便签" hidden></button>
+  <button id="mobile-open" type="button" class="primary" hidden>打开便签</button>
   <button id="mascot" class="mascot" title="单击打开便签，拖动可移动" aria-label="打开便签">
     <img id="mascot-image" alt="" draggable="false">
-    <span class="mobile-caption">打开便签</span>
   </button>
   <main id="panel" class="panel" hidden>
     <header class="top">
@@ -101,6 +102,10 @@
             <button id="reset-edge" type="button" class="quiet">还原</button>
           </div>
         </div>
+        <div id="mobile-pet-settings" class="settings-group" hidden>
+          <label class="switch-row">在其他应用上显示桌宠<input id="mobile-pet-enable" type="checkbox" role="switch"></label>
+          <p id="mobile-pet-status" role="status"></p>
+        </div>
         <h2>应用更新</h2>
         <div class="settings-group update-box">
           <div>
@@ -136,13 +141,15 @@
             <img id="sync-qr" alt="同步配对二维码" hidden>
             <label>配对码<input id="sync-code" readonly></label>
             <button id="sync-rotate" class="quiet">更换配对码</button>
-            <p>移动设备须能访问本机的 TCP 38425 端口。更换配对码后需重新配对。</p>
+            <p>同一 Wi-Fi 可选局域网地址。在外面使用时，两端都连接同一个 Tailscale 网络，并选择 Tailscale 地址生成配对码。主机的 TCP 38425 端口须允许对应网络访问。</p>
           </div>
         </div>
         <form id="sync-mobile" hidden>
           <label>主机配对码<input id="sync-pair-code" placeholder="粘贴配对码或识别二维码" autocomplete="off" maxlength="100" required></label>
           <label class="quiet qr-picker">识别二维码<input id="sync-photo" type="file" accept="image/*" capture="environment"></label>
+          <button id="sync-test" class="quiet" type="button">测试连接</button>
           <button id="sync-pair" class="primary" type="submit">配对并同步</button>
+          <p id="sync-test-status" role="status"></p>
           <button id="sync-now" class="quiet" type="button" hidden>立即同步</button>
           <button id="sync-unpair" class="quiet" type="button" hidden>取消配对</button>
           <button id="sync-drafts" class="quiet" type="button">查看本机未合并的草稿</button>

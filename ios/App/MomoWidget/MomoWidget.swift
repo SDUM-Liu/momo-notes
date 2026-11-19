@@ -52,7 +52,12 @@ struct MomoTodayWidget: Widget {
     private func tile(_ entry: TodayEntry) -> some View {
         let tint = Color(red: 1, green: 0.94, blue: 0.92)
         let content = VStack(alignment: .leading, spacing: 6) {
-            Text("桃桃 · 今日待办").font(.caption.bold())
+            HStack(spacing: 4) {
+                Text("桃桃 · 今日待办").font(.caption.bold())
+                Spacer(minLength: 0)
+                Image("pet").resizable().scaledToFit().frame(width: 26, height: 30)
+                    .accessibilityHidden(true)
+            }
             if let count = entry.count {
                 Text("\(count) 项未完成").font(.title3.bold())
                 if !entry.preview.isEmpty { Text(entry.preview).font(.caption).lineLimit(2) }

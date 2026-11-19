@@ -11,6 +11,7 @@ const keyName = 'ai-key'
 const noop = () => {}
 const proxy = registerPlugin('MomoProxy')
 const syncTransport = registerPlugin('MomoSync')
+const petOverlay = registerPlugin('MomoPet')
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -36,13 +37,15 @@ function transaction(db, store, write, operation) {
 
 export function createMobileBridge() {
   const native = Capacitor.isNativePlatform()
+  const platform = Capacitor.getPlatform()
+  const floatingPet = platform === 'android' && Capacitor.isPluginAvailable('MomoPet')
   const ready = openDatabase()
   const notes = Object.create(null)
   const records = Object.create(null)
   let localDrafts = {}
   let categories = [...builtInCategories]
   let writes = Promise.resolve()
-  let mode = 'pet'
+  let mode = 'note'
   let today
   let settings = { ...defaultSettings }
   let hasKey = false
@@ -215,6 +218,10 @@ export function createMobileBridge() {
 
   return {
     mobile: true,
+    platform,
+    floatingPet,
+    petState: () => petOverlay.state(),
+    setPet: enabled => petOverlay.setEnabled({ enabled }),
     async getState() { await init; return state() },
     onState: callback => { onState = callback },
     onDay: callback => { onDay = callback },
@@ -223,6 +230,7 @@ export function createMobileBridge() {
     onSync: callback => { onSync = callback },
     syncState: sync.state,
     pairSync: sync.pairWith,
+    testSync: sync.test,
     unpairSync: sync.unpair,
     runSync: sync.run,
     codex: sync.codex,
@@ -235,6 +243,7 @@ export function createMobileBridge() {
     downloadUpdate: noop,
     installUpdate: noop,
     toggle() {
+      if (mode === 'note' && floatingPet) return petOverlay.dismiss()
       mode = mode === 'note' ? 'pet' : 'note'
       onState(state())
     },

@@ -13,7 +13,10 @@ import defaultEdge from './assets/edge.png'
 import './style.css'
 
 const api = window.momo ?? (await import('./mobile-bridge.js')).createMobileBridge()
-if (api.mobile) document.body.dataset.platform = 'mobile'
+if (api.mobile) {
+  document.body.dataset.platform = 'mobile'
+  document.body.dataset.mobileOs = api.platform
+}
 const $ = id => document.getElementById(id)
 const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,globe,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,link,image,table-2}.svg', {
   query: '?raw', import: 'default', eager: true,
@@ -87,6 +90,10 @@ function drawState(value) {
   document.body.dataset.mode = state.mode
   document.body.dataset.edge = state.edge ?? ''
   $('panel').hidden = state.mode !== 'note'
+  if (api.mobile) {
+    $('mobile-dismiss').hidden = state.mode !== 'note'
+    $('mobile-open').hidden = state.mode === 'note'
+  }
   $('mascot-image').src = state.mode === 'note' ? perch : state.mode === 'edge' ? state.settings.edgeImage || defaultEdge : pet
   $('mascot-image').classList.toggle('custom', Boolean(state.settings.edgeImage))
   mascotLabel()
@@ -248,8 +255,20 @@ function wireDrag(element, click) {
 
 wireDrag($('mascot'), () => {
   if (state.mode === 'note' && view === 'browser') showView('note')
+  else if (api.mobile) void dismissMobile()
   else void api.toggle()
 })
+async function dismissMobile() {
+  try {
+    await saveBeforeSwitch()
+    if (view !== 'note') showView('note')
+    await api.toggle()
+  } catch (error) {
+    noteStatus(errorMessage(error), true)
+  }
+}
+$('mobile-dismiss').onclick = dismissMobile
+$('mobile-open').onclick = () => api.toggle()
 wireDrag($('title-drag'))
 $('return-today').onclick = () => loadNote()
 $('reload-shared-note').onclick = async () => {
@@ -529,8 +548,46 @@ $('settings').onclick = () => {
   renderEdgePreview()
   $('settings-status').textContent = ''
   showView('settings')
+  void refreshMobilePet()
   void Promise.resolve(api.syncState()).then(drawSync).catch(() => {})
 }
+
+async function refreshMobilePet(wanted) {
+  if (!api.floatingPet) return
+  const region = $('mobile-pet-settings')
+  const description = $('mobile-pet-status')
+  region.hidden = false
+  try {
+    let pet = await api.petState()
+    for (let attempt = 0; attempt < 4 && pet.permission && wanted !== undefined && pet.enabled !== wanted; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      pet = await api.petState()
+    }
+    $('mobile-pet-enable').checked = pet.enabled
+    description.textContent = pet.permission
+      ? (pet.enabled ? '收起便签后，桌宠会浮在其他应用上。' : '开启后可拖动桌宠，点它打开便签。')
+      : '请允许「显示在其他应用上层」，返回后再开启。'
+  } catch (error) {
+    description.textContent = errorMessage(error)
+  }
+}
+$('mobile-pet-enable').onchange = async event => {
+  const input = event.currentTarget
+  input.disabled = true
+  const wanted = input.checked
+  try {
+    await api.setPet(wanted)
+    await refreshMobilePet(wanted)
+  } catch (error) {
+    input.checked = !wanted
+    $('mobile-pet-status').textContent = errorMessage(error)
+  } finally {
+    input.disabled = false
+  }
+}
+if (api.floatingPet) document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && view === 'settings') void refreshMobilePet()
+})
 
 let syncState, qrRequest = 0
 function drawSync(value) {
@@ -550,9 +607,11 @@ function drawSync(value) {
   }
   $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
   $('sync-host-details').hidden = !value.enabled
-  $('sync-status').textContent = value.enabled ? (value.addresses.length ? '主机正在运行' : '主机正在运行，等待可用网络地址') : '将这台电脑设为便签和 AI 的主机。'
+  $('sync-status').textContent = value.enabled ? (value.addresses.length ? '主机正在监听 TCP ' + value.port : '主机正在运行，等待可用网络地址') : '将这台电脑设为便签和 AI 的主机。'
   const previous = $('sync-address').value
-  $('sync-address').replaceChildren(...value.addresses.map(address => new Option(address, address)))
+  const choices = value.endpoints ?? value.addresses.map(address => ({ address }))
+  $('sync-address').replaceChildren(...choices.map(({ address, name, tailscale }) =>
+    new Option((tailscale ? 'Tailscale · ' : name ? name + ' · ' : '') + address, address)))
   if (value.addresses.includes(previous)) $('sync-address').value = previous
 }
 
@@ -588,6 +647,7 @@ async function syncAction(operation, button) {
 
 $('settings-sync').onclick = () => {
   showView('sync')
+  $('sync-test-status').textContent = ''
   void syncAction(() => api.syncState())
 }
 $('sync-back').onclick = () => showView('settings')
@@ -596,6 +656,20 @@ $('sync-address').onchange = () => syncAction(() => showPairing())
 $('sync-code').onclick = event => event.currentTarget.select()
 $('sync-rotate').onclick = () => syncAction(() => api.rotateSync(), $('sync-rotate'))
 $('sync-now').onclick = () => syncAction(() => api.runSync(), $('sync-now'))
+$('sync-test').onclick = async event => {
+  const button = event.currentTarget
+  const status = $('sync-test-status')
+  button.disabled = true
+  status.textContent = '正在验证主机连接…'
+  try {
+    const host = await api.testSync($('sync-pair-code').value)
+    status.textContent = '已连通 ' + host + '，配对码可用。'
+  } catch (error) {
+    status.textContent = errorMessage(error)
+  } finally {
+    button.disabled = false
+  }
+}
 $('sync-unpair').onclick = () => syncAction(() => api.unpairSync(), $('sync-unpair'))
 $('sync-drafts').onclick = async () => {
   const drafts = await api.syncDrafts()

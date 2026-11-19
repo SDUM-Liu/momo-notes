@@ -19,6 +19,7 @@
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 		CAD3510D0000000000000001 = {isa = PBXBuildFile; fileRef = CAD3510D0000000000000002; };
 		CAD3510D0000000000000006 = {isa = PBXBuildFile; fileRef = CAD3510D0000000000000007; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		CAD3510D0000000000000012 = {isa = PBXBuildFile; fileRef = CAD3510D0000000000000013; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +38,7 @@
 		CAD3510D0000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MomoWidget.swift; sourceTree = "<group>"; };
 		CAD3510D000000000000000f = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		CAD3510D0000000000000010 = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MomoWidget.entitlements; sourceTree = "<group>"; };
+		CAD3510D0000000000000013 = {isa = PBXFileReference; lastKnownFileType = image.png; path = "../../src/assets/pet.png"; sourceTree = SOURCE_ROOT; };
 		CAD3510D0000000000000007 = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = MomoWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -89,7 +91,7 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		CAD3510D0000000000000008 = {isa = PBXGroup; children = (CAD3510D0000000000000002,CAD3510D000000000000000f,CAD3510D0000000000000010,); path = MomoWidget; sourceTree = "<group>"; };
+		CAD3510D0000000000000008 = {isa = PBXGroup; children = (CAD3510D0000000000000002,CAD3510D000000000000000f,CAD3510D0000000000000010,CAD3510D0000000000000013,); path = MomoWidget; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -190,7 +192,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		CAD3510D0000000000000004 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		CAD3510D0000000000000004 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (CAD3510D0000000000000012,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -350,7 +352,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.4.1;
+				MARKETING_VERSION = 0.4.2;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdumliu.momonotes;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -373,7 +375,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.4.1;
+				MARKETING_VERSION = 0.4.2;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdumliu.momonotes;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
@@ -392,7 +394,7 @@
 				INFOPLIST_FILE = MomoWidget/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.4;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
-				MARKETING_VERSION = 0.4.1;
+				MARKETING_VERSION = 0.4.2;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdumliu.momonotes.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -411,7 +413,7 @@
 				INFOPLIST_FILE = MomoWidget/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.4;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
-				MARKETING_VERSION = 0.4.1;
+				MARKETING_VERSION = 0.4.2;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.sdumliu.momonotes.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

@@ -10,10 +10,13 @@ import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @CapacitorPlugin(name = "MomoSync")
 public class MomoSyncPlugin extends Plugin {
     private static final int LIMIT = 32 * 1024 * 1024;
+    private final ExecutorService transfers = Executors.newFixedThreadPool(3);
 
     @PluginMethod
     public void updateWidget(PluginCall call) {
@@ -36,6 +39,10 @@ public class MomoSyncPlugin extends Plugin {
                 return;
             }
         }
+        transfers.execute(() -> transfer(call, host, message));
+    }
+
+    private void transfer(PluginCall call, String host, String message) {
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(host, 38425), 6000);
             socket.setSoTimeout(65000);
@@ -57,9 +64,12 @@ public class MomoSyncPlugin extends Plugin {
                 }
             }
         } catch (Exception error) {
-            call.reject("连不上主机，请确认同步已开启、地址正确且设备网络互通");
+            call.reject("没有收到主机回复", "SYNC_CONNECTION");
             return;
         }
-        call.reject("主机未接受配对，请核对配对码");
+        call.reject("主机未接受配对", "SYNC_AUTH");
     }
+
+    @Override
+    protected void handleOnDestroy() { transfers.shutdownNow(); }
 }

@@ -119,6 +119,8 @@ private final class SyncExchange {
                 connection.send(content: message, completion: .contentProcessed { [self] error in
                     if error != nil { finish(nil) } else { receive() }
                 })
+            case .waiting where connection.currentPath?.unsatisfiedReason == .localNetworkDenied:
+                finish(nil, code: "SYNC_LOCAL_NETWORK")
             case .failed, .cancelled:
                 finish(nil)
             default:
@@ -141,16 +143,22 @@ private final class SyncExchange {
                 if response.count > Self.limit { finish(nil); return }
                 if end != nil { finish(String(data: response, encoding: .ascii)); return }
             }
-            if complete || error != nil { finish(nil) } else { receive() }
+            if error != nil { finish(nil) }
+            else if complete { finish(nil, code: "SYNC_AUTH") }
+            else { receive() }
         }
     }
 
-    private func finish(_ result: String?) {
+    private func finish(_ result: String?, code: String = "SYNC_CONNECTION") {
         if finished { return }
         finished = true
         connection.stateUpdateHandler = nil
         connection.cancel()
         if let result = result { call.resolve(["message": result]) }
-        else { call.reject("主机未响应，请检查配对码和本地网络权限") }
+        else if code == "SYNC_LOCAL_NETWORK" {
+            call.reject("请在 iPhone 设置中允许「桃桃便签」访问本地网络，然后重试", code)
+        } else {
+            call.reject("未收到有效的主机回复", code)
+        }
     }
 }

@@ -14,6 +14,11 @@ export function validHost(host) {
     && host.split('.').every(part => +part <= 255 && String(+part) === part)
 }
 
+export function tailscaleAddress(host) {
+  const [first, second] = String(host).split('.').map(Number)
+  return first === 100 && second >= 64 && second <= 127
+}
+
 export function pairingCode(host, key) {
   return 'momo1:' + host + ':' + key
 }

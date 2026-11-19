@@ -3,7 +3,7 @@ const os = require('node:os')
 const path = require('node:path')
 const fs = require('node:fs')
 const { randomBytes } = require('node:crypto')
-const { seal, unseal, syncPort, wireLimit, pairingCode } = require('../shared/sync.mjs')
+const { seal, unseal, syncPort, wireLimit, pairingCode, tailscaleAddress } = require('../shared/sync.mjs')
 const { noteIdentity, noteKey, localDay, validateCategory, hasContent } = require('../shared/notes.mjs')
 const { revisionOf } = require('./data.cjs')
 
@@ -35,13 +35,17 @@ function createSync(directory, store, ask, notify, codex) {
     fs.renameSync(filename + '.tmp', filename)
   }
 
-  function addresses() {
-    return Object.entries(os.networkInterfaces()).filter(([name]) => !/vethernet|loopback/i.test(name))
-      .flatMap(([, list]) => list.filter(item => item.family === 'IPv4' && !item.internal).map(item => item.address))
+  function endpoints() {
+    const entries = Object.entries(os.networkInterfaces()).filter(([name]) => !/vethernet|loopback|vmware|virtualbox|wsl/i.test(name))
+      .flatMap(([name, list]) => list.filter(item => item.family === 'IPv4' && !item.internal && !item.address.startsWith('169.254.'))
+        .map(item => ({ address: item.address, name, tailscale: tailscaleAddress(item.address) })))
+    return entries.sort((a, b) => Number(b.tailscale) - Number(a.tailscale))
   }
 
   function state() {
-    return { role: 'host', enabled: Boolean(server?.listening), addresses: addresses(), port: syncPort, locked: Boolean(lease) }
+    const choices = endpoints()
+    return { role: 'host', enabled: Boolean(server?.listening), addresses: choices.map(item => item.address),
+      endpoints: choices, port: syncPort, locked: Boolean(lease) }
   }
 
   function put({ key, doc, base }, remote = true) {
@@ -126,8 +130,11 @@ function createSync(directory, store, ask, notify, codex) {
       try {
         request = unseal(config.key, 'request', wire)
         const now = Date.now()
-        if (!/^[a-f0-9]{24}$/.test(request.id) || !Number.isFinite(request.time)
-            || Math.abs(now - request.time) > 120000 || replay.has(request.id)) return socket.destroy()
+        if (!/^[a-f0-9]{24}$/.test(request.id) || !Number.isFinite(request.time) || replay.has(request.id)) return socket.destroy()
+        if (Math.abs(now - request.time) > 120000) {
+          const error = '主机与手机的时钟相差超过两分钟，请开启系统自动设置时间后重试'
+          return socket.end(seal(config.key, 'reply/' + request.id, { ok: false, code: 'SYNC_CLOCK', error }) + '\n')
+        }
         for (const [id, expires] of replay) if (expires <= now) replay.delete(id)
         if (replay.size >= 10000) return socket.destroy()
         replay.set(request.id, now + 240000)
@@ -203,7 +210,7 @@ function createSync(directory, store, ask, notify, codex) {
     restore: () => config.enabled ? enable() : Promise.resolve(state()),
     stop,
     code(host) {
-      if (!server?.listening || !addresses().includes(host)) throw new Error('请先开启同步并选择主机地址')
+      if (!server?.listening || !endpoints().some(item => item.address === host)) throw new Error('请先开启同步并选择主机地址')
       return pairingCode(host, config.key)
     },
     rotate() {
