@@ -67,7 +67,6 @@ def main(apk):
         r'mResumedActivity:.*com.android.settings|topResumedActivity=.*com.android.settings', text)), 'Overlay settings did not open')
     shell('appops', 'set', PACKAGE, 'SYSTEM_ALERT_WINDOW', 'allow')
     shell('input', 'keyevent', 'KEYCODE_BACK')
-    click('返回便签')
     shell('input', 'keyevent', 'KEYCODE_HOME')
     overlays = wait_for(windows, lambda items: len(items) == 1, 'Pet did not become a real overlay after granting permission')
     frame = re.search(r'\bframe=\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', overlays[0])
@@ -85,7 +84,11 @@ if __name__ == '__main__':
     try:
         main(sys.argv[1])
     finally:
-        (OUTPUT / 'logcat.txt').write_text(adb('logcat', '-d', '-t', '2200'), encoding='utf-8')
+        crashes = adb('logcat', '-b', 'crash', '-d')
+        print(crashes)
+        (OUTPUT / 'crash.txt').write_text(crashes, encoding='utf-8')
+        (OUTPUT / 'logcat.txt').write_text(adb('logcat', '-d', '-s', 'AndroidRuntime:V', 'ActivityTaskManager:I',
+                                              'MomoPet:V', 'Capacitor:V', 'chromium:W'), encoding='utf-8')
         (OUTPUT / 'windows.txt').write_text(shell('dumpsys', 'window', 'windows'), encoding='utf-8')
         (OUTPUT / 'activities.txt').write_text(shell('dumpsys', 'activity', 'activities'), encoding='utf-8')
         with (OUTPUT / 'screen.png').open('wb') as image:
