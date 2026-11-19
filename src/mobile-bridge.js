@@ -7,7 +7,7 @@ import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../share
 import { webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
-import { mobileInstallers } from './mobile-installers.js'
+import { mobileUpdates } from './mobile-updates.js'
 import { digest } from '../shared/sync.mjs'
 
 const keyName = 'ai-key'
@@ -41,6 +41,7 @@ function transaction(db, store, write, operation) {
 
 export function createMobileBridge() {
   const native = Capacitor.isNativePlatform()
+  const updates = mobileUpdates(native)
   const platform = Capacitor.getPlatform()
   const floatingPet = platform === 'android' && Capacitor.isPluginAvailable('MomoPet')
   const ready = openDatabase()
@@ -60,7 +61,7 @@ export function createMobileBridge() {
   const publicSettings = () => ({ ...settings, hasKey })
   const state = () => ({
     mode, today, settings: publicSettings(), browser, categories, locked: sync.state().locked,
-    update: { status: 'mobile', version: __APP_VERSION__ },
+    update: updates.state,
   })
 
   function queueWrite(operation) {
@@ -240,7 +241,6 @@ export function createMobileBridge() {
 
   return {
     mobile: true,
-    ...mobileInstallers(native, platform),
     platform,
     floatingPet,
     liveScan: native && Capacitor.isPluginAvailable('CapacitorBarcodeScanner'),
@@ -278,13 +278,12 @@ export function createMobileBridge() {
     runSync: sync.run,
     codex: sync.codex,
     syncDrafts: () => localDrafts,
-    onUpdate: noop,
+    onUpdate: updates.onUpdate,
     browserViewport: noop,
     browserBack: noop,
     hideBrowser: noop,
-    checkUpdate: noop,
-    downloadUpdate: noop,
-    installUpdate: noop,
+    checkUpdate: updates.checkUpdate,
+    openUpdate: updates.openUpdate,
     toggle() {
       if (mode === 'note' && floatingPet) return petOverlay.dismiss()
       mode = mode === 'note' ? 'pet' : 'note'

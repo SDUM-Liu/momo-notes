@@ -120,7 +120,7 @@
         <label id="automatic-update-row" class="switch-row update-setting desktop-only">
           后台下载，退出时自动安装<input id="automatic-update" type="checkbox" role="switch">
         </label>
-        <button id="installer-settings" type="button" class="quiet">下载其他版本</button>
+        <button id="installer-settings" type="button" class="quiet desktop-only">下载其他版本</button>
         <h2>AI 连接</h2>
         <p id="mobile-ai-host" hidden>配对后，AI API 由主机调用。</p>
         <fieldset id="api-settings" class="settings-group fields">
@@ -133,7 +133,7 @@
       </form>
       <div class="subfoot"><span id="settings-status" role="status"></span><button type="submit" form="settings-form" class="primary">保存设置</button></div>
     </section>
-    <section id="installers-view" class="view sub-view" hidden>
+    <section id="installers-view" class="view sub-view desktop-only" hidden>
       <div class="subhead"><h1>安装包下载</h1><button id="installer-back" type="button" class="quiet">返回设置</button></div>
       <div class="sync-body">
         <form id="installer-fields" hidden>

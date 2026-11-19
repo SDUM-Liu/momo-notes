@@ -39,9 +39,8 @@ export function wireInstallerDownloads(api, showView, errorMessage) {
       target.replaceChildren(...catalog.targets.map(({ id, label }) => new Option(label, id)))
       if (!catalog.preferredPlatform) target.prepend(new Option('请选择安装包平台', ''))
       target.value = catalog.preferredPlatform
-      download.textContent = catalog.managed ? '下载安装包' : '在浏览器下载'
-      $('installer-destination').textContent = catalog.directory || '由系统浏览器保存下载文件'
-      $('installer-directory').hidden = !catalog.managed
+      $('installer-destination').textContent = catalog.directory
+      $('installer-directory').hidden = false
       $('installer-fields').hidden = false
       chooseVersions()
       status.textContent = ''
@@ -76,12 +75,12 @@ export function wireInstallerDownloads(api, showView, errorMessage) {
     const asset = selected()
     if (!asset || busy) return
     busy = target.disabled = version.disabled = download.disabled = true
-    progress.hidden = !catalog.managed
+    progress.hidden = false
     progress.removeAttribute('value')
-    status.textContent = catalog.managed ? '正在下载安装包…' : '正在打开浏览器…'
+    status.textContent = '正在下载安装包…'
     try {
       const result = await api.downloadInstaller(asset.id)
-      status.textContent = result.external ? '已交给系统浏览器下载' : '已下载 ' + result.name
+      status.textContent = '已下载 ' + result.name
         + (result.opened ? '，已打开下载目录。' : '。可点击「打开下载目录」查看。')
     } catch (error) {
       status.textContent = errorMessage(error)

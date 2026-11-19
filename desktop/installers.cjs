@@ -83,7 +83,7 @@ function createInstallerDownloads(onProgress) {
   }
 
   return {
-    async catalog() { return { ...await load(), directory: downloadsDirectory(), managed: true } },
+    async catalog() { return { ...await load(), directory: downloadsDirectory() } },
     download,
     reveal: () => reveal(downloadsDirectory()),
     stop() { controller?.abort() },

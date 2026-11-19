@@ -513,7 +513,6 @@ function drawUpdate(update) {
   const messages = {
     idle: '',
     unavailable: '请使用对应平台的安装包更新',
-    mobile: '通过该平台的安装渠道更新',
     checking: '正在检查更新…',
     current: '已是最新版本',
     available: '可更新至 v' + target,
@@ -532,10 +531,9 @@ function drawUpdate(update) {
   $('update-status').textContent = messages[status]
   $('update-status').classList.toggle('error', status.endsWith('-error'))
   $('settings').toggleAttribute('data-update', ['available', 'ready', 'downloading', 'download-error', 'install-error'].includes(status))
-  $('update-action').textContent = actionLabels[status] ?? '检查更新'
-  $('update-action').hidden = status === 'mobile'
-  $('update-action').disabled = ['unavailable', 'mobile', 'checking', 'downloading', 'installing'].includes(status)
-  $('automatic-update-row').hidden = ['unavailable', 'mobile'].includes(status)
+  $('update-action').textContent = api.mobile && status === 'available' ? '查看更新' : actionLabels[status] ?? '检查更新'
+  $('update-action').disabled = ['unavailable', 'checking', 'downloading', 'installing'].includes(status)
+  $('automatic-update-row').hidden = api.mobile || status === 'unavailable'
   $('update-progress').hidden = status !== 'downloading'
   if (progress === undefined) $('update-progress').removeAttribute('value')
   else $('update-progress').value = progress
@@ -545,7 +543,10 @@ $('update-action').onclick = async () => {
   const { status } = updateState
   $('update-action').disabled = true
   try {
-    if (['ready', 'install-error'].includes(status)) {
+    if (api.mobile && status === 'available') {
+      await api.openUpdate()
+      $('update-action').disabled = false
+    } else if (['ready', 'install-error'].includes(status)) {
       await saveBeforeSwitch()
       await api.installUpdate()
     } else if (['available', 'download-error'].includes(status)) {
@@ -847,7 +848,7 @@ for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'is
   $(button).onclick = () => api.openProject(target).catch(error => noteStatus(errorMessage(error), true))
 }
 const codexView = wireCodex(api, showView, errorMessage)
-wireInstallerDownloads(api, showView, errorMessage)
+if (!api.mobile) wireInstallerDownloads(api, showView, errorMessage)
 let noteJob
 let profileRevision = 0
 $('ai-cancel').onclick = () => {
