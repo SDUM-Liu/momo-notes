@@ -52,6 +52,18 @@ def windows():
             if PACKAGE in chunk and 'ty=APPLICATION_OVERLAY' in chunk and 'mHasSurface=true' in chunk]
 
 
+def frame_of(window):
+    frame = re.search(r'\bframe=\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', window)
+    if not frame:
+        raise AssertionError('Could not locate the overlay window frame')
+    return tuple(map(int, frame.groups()))
+
+
+def resumed(package):
+    return bool(re.search(r'(?:topResumedActivity=|mResumedActivity:).*' + re.escape(package) + r'/',
+                          shell('dumpsys', 'activity', 'activities')))
+
+
 def main(apk):
     shell('wm', 'size', '1080x2160')
     shell('wm', 'density', '420')
@@ -63,20 +75,24 @@ def main(apk):
                 '-n', PACKAGE + '/.MainActivity'))
     click('设置')
     click('在其他应用上显示桌宠')
-    wait_for(lambda: shell('dumpsys', 'activity', 'activities'), lambda text: bool(re.search(
-        r'mResumedActivity:.*com.android.settings|topResumedActivity=.*com.android.settings', text)), 'Overlay settings did not open')
+    wait_for(lambda: resumed('com.android.settings'), bool, 'Overlay settings did not open')
     shell('appops', 'set', PACKAGE, 'SYSTEM_ALERT_WINDOW', 'allow')
     shell('input', 'keyevent', 'KEYCODE_BACK')
+    wait_for(lambda: resumed(PACKAGE), bool, 'The editor did not resume after overlay settings')
+    wait_for(lambda: shell('dumpsys', 'activity', 'services', PACKAGE),
+             lambda text: '.PetOverlayService' in text and 'isForeground=true' in text,
+             'The pet service did not start after returning to the editor')
     shell('input', 'keyevent', 'KEYCODE_HOME')
     overlays = wait_for(windows, lambda items: len(items) == 1, 'Pet did not become a real overlay after granting permission')
-    frame = re.search(r'\bframe=\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', overlays[0])
-    if not frame:
-        raise AssertionError('Could not locate the desktop pet window frame')
-    left, top, right, bottom = map(int, frame.groups())
+    left, top, right, bottom = frame_of(overlays[0])
     shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
-    wait_for(windows, lambda items: bool(items) and all('NOT_FOCUSABLE' not in item for item in items),
-             'Tapping the pet did not open a focusable system overlay')
-    print('PASS app launched, permission return enabled the pet, and pet opened a system note overlay')
+    note = wait_for(windows, lambda items: len(items) == 1 and 'NOT_FOCUSABLE' not in items[0],
+                    'Tapping the pet did not open a focusable system overlay')
+    left, top, _, _ = frame_of(note[0])
+    shell('input', 'swipe', str(left + 80), str(top + 25), str(left + 80), str(top + 145), '500')
+    wait_for(windows, lambda items: len(items) == 1 and frame_of(items[0])[1] > top,
+             'Dragging the note did not move the system window')
+    print('PASS app launched, permission return enabled the pet, and the system note overlay opened and moved')
 
 
 if __name__ == '__main__':
