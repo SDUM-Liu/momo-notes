@@ -29,9 +29,10 @@ def wait_for(get, condition, description):
 
 
 def hierarchy():
-    shell('uiautomator', 'dump', '/sdcard/momo-smoke.xml')
-    raw = shell('cat', '/sdcard/momo-smoke.xml')
-    return ET.fromstring(raw)
+    output = shell('uiautomator', 'dump', '/sdcard/momo-smoke.xml')
+    if 'dumped to:' not in output:
+        return ET.Element('hierarchy')
+    return ET.fromstring(shell('cat', '/sdcard/momo-smoke.xml'))
 
 
 def find_node(tree, name):
@@ -73,6 +74,7 @@ def main(apk):
     adb('logcat', '-c')
     print(shell('am', 'start', '-W', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER',
                 '-n', PACKAGE + '/.MainActivity'))
+    wait_for(lambda: resumed(PACKAGE), bool, 'The app did not reach its foreground activity')
     click('设置')
     click('在其他应用上显示桌宠')
     wait_for(lambda: resumed('com.android.settings'), bool, 'Overlay settings did not open')
@@ -107,5 +109,6 @@ if __name__ == '__main__':
                                               'MomoPet:V', 'Capacitor:V', 'chromium:W'), encoding='utf-8')
         (OUTPUT / 'windows.txt').write_text(shell('dumpsys', 'window', 'windows'), encoding='utf-8')
         (OUTPUT / 'activities.txt').write_text(shell('dumpsys', 'activity', 'activities'), encoding='utf-8')
+        (OUTPUT / 'services.txt').write_text(shell('dumpsys', 'activity', 'services', PACKAGE), encoding='utf-8')
         with (OUTPUT / 'screen.png').open('wb') as image:
             subprocess.run(['adb', 'exec-out', 'screencap', '-p'], stdout=image, timeout=15)
