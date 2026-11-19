@@ -75,7 +75,7 @@ function codexAction(op, data, paired = false) {
   }
   if (op === 'active') return codex.active(paired)
   if (op === 'models') return codex.models()
-  if (op === 'list') return codex.list(paired)
+  if (op === 'list') return codex.list(data, paired)
   if (op === 'read') return codex.read(data, paired)
   if (op === 'send') return codex.send(data, paired)
   throw new Error('未知的 Codex 请求')
@@ -121,9 +121,12 @@ function registerIPC() {
   handle('sync:enable', sync.setEnabled)
   handle('sync:code', sync.code)
   handle('sync:rotate', sync.rotate)
+  handle('sync:link', sync.link)
+  handle('sync:status', sync.status)
+  handle('sync:exchange', sync.exchange)
   handle('codex:action', (op, data) => codexAction(op, data))
   handle('codex:settings', codex.settings)
-  handle('codex:configure', values => codex.configure({ enabled: values.enabled, write: values.write }))
+  handle('codex:configure', values => codex.configure({ enabled: values.enabled, write: values.write, shareAll: values.shareAll }))
   handle('codex:share', codex.share)
   handle('codex:folder', async action => {
     if (action === 'reset') return codex.configure({ folder: null })
@@ -274,7 +277,8 @@ function start() {
     skipTaskbar: true,
     fullscreenable: false,
     alwaysOnTop: store.data.settings.alwaysOnTop,
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true,
+      nodeIntegration: false, backgroundThrottling: false },
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
@@ -290,7 +294,6 @@ function start() {
   sync = createSync(app.getPath('userData'), store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
   }, (op, payload) => codexAction(op, payload, true))
-  void sync.restore().catch(error => console.error('Sync startup failed:', error.message))
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
   win.on('close', event => {

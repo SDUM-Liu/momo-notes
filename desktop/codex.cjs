@@ -26,10 +26,11 @@ function splitNotes(entries) {
   return parts
 }
 
-function formatThread(thread) {
+function formatThread(thread, archived) {
   return {
     id: thread.id, title: (thread.name || thread.preview || '未命名会话').slice(0, 100),
-    status: thread.status?.type ?? 'unknown',
+    status: thread.status?.type ?? 'unknown', cwd: thread.cwd,
+    updatedAt: thread.updatedAt ?? thread.createdAt ?? 0, archived,
   }
 }
 
@@ -38,7 +39,7 @@ function messageHistory(turns) {
     if (item.type === 'agentMessage') return [{ role: 'Codex', text: item.text.slice(0, limit) }]
     if (item.type === 'userMessage') return [{ role: '你', text: item.content.filter(part => part.type === 'text').map(part => part.text).join('\n').slice(0, limit) }]
     return []
-  }).slice(-28)
+  })
 }
 
 async function listModels(client) {
@@ -70,12 +71,12 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')) ?? {} } catch {}
   }
   const jobs = new Map()
-  let remote, activeRemote
+  let remote, activeRemote, catalog
 
   function settings() {
     return {
       folder: config.folder || defaultFolder, defaultFolder: !config.folder,
-      enabled: Boolean(config.enabled), write: Boolean(config.write),
+      enabled: Boolean(config.enabled), write: Boolean(config.write), shareAll: Boolean(config.shareAll),
     }
   }
 
@@ -86,16 +87,19 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
   }
 
   function configure(values) {
-    if (activeRemote) throw new Error('请先结束正在运行的 Codex 任务')
+    if (activeRemote && (Object.hasOwn(values, 'folder')
+        || (Object.hasOwn(values, 'write') && Boolean(values.write) !== Boolean(config.write)))) {
+      throw new Error('请先结束正在运行的 Codex 任务')
+    }
     const next = { ...config }
     if (Object.hasOwn(values, 'folder')) {
       const custom = values.folder ? fs.realpathSync(values.folder) : null
-      if ((custom || defaultFolder) !== (config.folder || defaultFolder)) next.shared = []
       if (custom) next.folder = custom
       else delete next.folder
     }
     if (Object.hasOwn(values, 'enabled')) next.enabled = Boolean(values.enabled)
     if (Object.hasOwn(values, 'write')) next.write = Boolean(values.write)
+    if (Object.hasOwn(values, 'shareAll')) next.shareAll = Boolean(values.shareAll)
     commitConfig(next)
     return settings()
   }
@@ -127,8 +131,8 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     const job = jobs.get(id)
     if (!job) throw new Error('主机上找不到这次任务')
     if (paired && job.kind === 'work') {
-      scope(true)
-      if (job.threadId ? !config.shared?.includes(job.threadId) : !job.paired) throw new Error('这条会话尚未在主机共享')
+      requireRemote(true)
+      if (job.threadId ? !canRead(job.threadId, true) : !job.paired) throw new Error('这条会话尚未在主机共享')
     }
     const { client, finished, paired: startedByPaired, ...result } = job
     return result
@@ -238,8 +242,15 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     return jobResult(job.id)
   }
 
-  function scope(paired) {
+  function requireRemote(paired) {
     if (paired && !config.enabled) throw new Error('主机尚未启用远程会话')
+  }
+
+  function canRead(id, paired) {
+    return !paired || config.shareAll || config.shared?.includes(id)
+  }
+
+  function scope() {
     if (!config.folder) fs.mkdirSync(defaultFolder, { recursive: true })
     return fs.realpathSync(config.folder || defaultFolder)
   }
@@ -256,27 +267,59 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
         },
       })
       remote = authenticated(client).then(() => client)
-      client.events.once('closed', () => { remote = null })
+      client.events.once('closed', () => { remote = null; catalog = null })
       remote.catch(() => { client.close(); remote = null })
     }
     return remote
   }
 
-  async function threadInScope(id, paired) {
-    const folder = scope(paired)
-    if (paired && !config.shared?.includes(id)) throw new Error('这条会话尚未在主机共享')
-    const client = await workClient()
-    const { thread } = await client.request('thread/read', { threadId: id, includeTurns: false })
-    if (fs.realpathSync(thread.cwd) !== folder) throw new Error('这条会话不在当前选择的工作目录')
-    return { client, thread, folder }
+  async function allThreads(client, fresh = false) {
+    if (fresh || !catalog || catalog.expires < Date.now()) {
+      const operation = Promise.all([false, true].map(async archived => {
+        const threads = []
+        let cursor = null
+        do {
+          const page = await client.request('thread/list', {
+            cursor, archived, limit: 100, currentAccountOnly: true, modelProviders: [],
+            sourceKinds: ['cli', 'appServer', 'vscode', 'exec', 'unknown'],
+          })
+          threads.push(...page.data.filter(thread => !thread.ephemeral).map(thread => formatThread(thread, archived)))
+          cursor = page.nextCursor
+        } while (cursor)
+        return threads
+      })).then(pages => pages.flat().sort((a, b) => b.updatedAt - a.updatedAt))
+      catalog = { operation, expires: Date.now() + 15000 }
+      void operation.catch(() => { if (catalog?.operation === operation) catalog = null })
+    }
+    return catalog.operation
   }
 
-  async function list(paired) {
-    const folder = scope(paired)
+  async function threadInScope(id, paired) {
+    requireRemote(paired)
+    if (!canRead(id, paired)) throw new Error('这条会话尚未在主机共享')
     const client = await workClient()
-    const recent = await client.request('thread/list', { cwd: folder, limit: 60, sourceKinds: ['cli', 'appServer', 'vscode', 'exec'] })
-    return recent.data.filter(thread => !paired || config.shared?.includes(thread.id))
-      .map(thread => ({ ...formatThread(thread), shared: Boolean(config.shared?.includes(thread.id)) }))
+    const present = threads => threads.some(thread => thread.id === id)
+    if (!present(await allThreads(client)) && !present(await allThreads(client, true))) {
+      throw new Error('当前主机账号不能访问这条 Codex 会话')
+    }
+    const { thread } = await client.request('thread/read', { threadId: id, includeTurns: false })
+    return { client, thread }
+  }
+
+  async function list(request, paired) {
+    requireRemote(paired)
+    const client = await workClient()
+    const term = String(request?.search ?? '').trim().toLowerCase().slice(0, 100)
+    const offset = Number.isInteger(request?.cursor) ? Math.max(0, request.cursor) : 0
+    const threads = (await allThreads(client, request?.refresh === true))
+      .filter(thread => canRead(thread.id, paired))
+      .map(thread => ({ ...thread, cwd: paired ? path.basename(thread.cwd || '') : thread.cwd }))
+      .filter(thread => !term || (thread.title + '\n' + thread.cwd).toLowerCase().includes(term))
+    const items = threads.slice(offset, offset + 45).map(thread => ({
+      ...thread,
+      shared: Boolean(config.shareAll || config.shared?.includes(thread.id)),
+    }))
+    return { threads: items, cursor: offset + items.length < threads.length ? offset + items.length : null }
   }
 
   async function read(request, paired) {
@@ -289,19 +332,23 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
 
   async function share(id, enabled) {
     await threadInScope(id, false)
+    saveShare(id, enabled)
+    return { id, shared: Boolean(enabled) }
+  }
+
+  function saveShare(id, enabled) {
     const shared = new Set(config.shared ?? [])
     if (enabled) shared.add(id)
     else shared.delete(id)
     commitConfig({ ...config, shared: [...shared] })
-    return { id, shared: Boolean(enabled) }
   }
 
   function send(request, paired) {
-    const folder = scope(paired)
+    requireRemote(paired)
     const prompt = String(request?.prompt ?? '').trim()
     if (!prompt || prompt.length > 12000) throw new Error('请输入 1 至 12000 字的任务')
     if (activeRemote) throw new Error('主机已有一项 Codex 任务正在运行')
-    if (paired && request.id && !config.shared?.includes(request.id)) throw new Error('这条会话尚未在主机共享')
+    if (request.id && !canRead(request.id, paired)) throw new Error('这条会话尚未在主机共享')
     const job = newJob('work', '主机 Codex')
     job.paired = paired
     activeRemote = job
@@ -309,27 +356,37 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
       try {
         const client = await workClient()
         const model = await requestedModel(client, request.model)
-        const access = config.write ? 'workspace-write' : 'read-only'
-        const modelOption = model ? { model: model.model } : {}
-        const opts = { cwd: folder, sandbox: access, approvalPolicy: 'on-request', approvalsReviewer: 'user', ...modelOption }
+        let folder
         if (request.id) {
           const { thread } = await threadInScope(request.id, paired)
-          if (thread.status?.type === 'active') throw new Error('原会话正在运行，请等它结束后再续接')
+          const latest = await client.request('thread/turns/list', { threadId: request.id, limit: 1, itemsView: 'summary' })
+          if (thread.status?.type === 'active' || latest.data[0]?.status === 'inProgress') {
+            throw new Error('原会话正在运行，请等它结束后再续接')
+          }
+          try { folder = fs.realpathSync(thread.cwd) } catch { throw new Error('原会话工作目录已不存在，仍可查看历史') }
+        } else folder = scope()
+        let writable = false
+        if (config.write) {
+          try { writable = folder === scope() } catch {}
         }
+        const access = writable ? 'workspace-write' : 'read-only'
+        const modelOption = model ? { model: model.model } : {}
+        const opts = { cwd: folder, sandbox: access, approvalPolicy: 'on-request', approvalsReviewer: 'user', ...modelOption }
         const response = request.id
           ? await client.request('thread/resume', { ...opts, threadId: request.id, excludeTurns: true })
           : await client.request('thread/start', opts)
-        if (paired && !request.id) await share(response.thread.id, true)
+        if (paired && !request.id) saveShare(response.thread.id, true)
         job.threadId = response.thread.id
         await turn(client, job, prompt, {
           cwd: folder, approvalPolicy: 'on-request', approvalsReviewer: 'user', ...modelOption,
-          sandboxPolicy: config.write
+          sandboxPolicy: writable
             ? { type: 'workspaceWrite', writableRoots: [folder], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
             : { type: 'readOnly', networkAccess: false },
         })
       } catch (error) {
         complete(job, 'failed', error.message)
       } finally {
+        catalog = null
         activeRemote = undefined
       }
     })()
@@ -338,15 +395,15 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
 
   return {
     ask, jobResult, settings, configure, share, list, read, send,
-    folder: () => scope(false),
+    folder: scope,
     async models() {
       const models = await listModels(await workClient())
       return [...models.values()].map(model => ({ id: model.model, label: model.displayName || model.model }))
     },
     active(paired) {
-      scope(paired)
+      requireRemote(paired)
       if (!activeRemote || (paired && !(activeRemote.threadId
-        ? config.shared?.includes(activeRemote.threadId) : activeRemote.paired))) return null
+        ? canRead(activeRemote.threadId, true) : activeRemote.paired))) return null
       return jobResult(activeRemote.id, paired)
     },
     async interrupt(id) {

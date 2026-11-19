@@ -7,6 +7,7 @@ import { Placeholder } from '@tiptap/extension-placeholder'
 import { linkOrNull, webUrl } from '../shared/links.mjs'
 import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
 import { parsePairing } from '../shared/sync.mjs'
+import { hostSyncLink } from './rtc-sync.js'
 import { followCodex, wireCodex, wireModelPicker } from './codex-view.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
@@ -111,8 +112,25 @@ function mascotLabel() {
 }
 
 function drawCategories(values) {
-  $('categories').replaceChildren(...values.map(({ id, name }) => new Option(name, id)))
-  $('categories').value = category
+  $('categories').replaceChildren(...values.map(({ id, name }) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'quiet'
+    button.setAttribute('role', 'tab')
+    button.dataset.category = id
+    button.textContent = name
+    button.title = name
+    return button
+  }))
+  markCategory()
+}
+
+function markCategory() {
+  for (const tab of $('categories').children) {
+    const selected = tab.dataset.category === category
+    tab.setAttribute('aria-selected', String(selected))
+    tab.tabIndex = selected ? 0 : -1
+  }
 }
 
 function setReadOnly(value) {
@@ -178,7 +196,7 @@ function saveDocument(doc) {
   }).catch(error => {
     previousSaveError = true
     const message = errorMessage(error)
-    retryOnUnlock = /同步中|主机未连接/.test(message)
+    retryOnUnlock = /同步中|正在同步|主机未连接/.test(message)
     $('reload-shared-note').hidden = !message.includes('主机已有更新')
     noteStatus(message, true)
   })
@@ -193,7 +211,7 @@ async function saveBeforeSwitch() {
   if (previousSaveError) throw new Error('请先解决当前便签的保存错误')
 }
 
-async function loadNote(date, selected = category) {
+async function loadNote(date, selected = category, navigate = true) {
   followNewDay = false
   const request = ++pageRequest
   try {
@@ -202,7 +220,7 @@ async function loadNote(date, selected = category) {
     if (request !== pageRequest) return
     if (currentDate !== page.date || category !== page.category) editor.commands.setContent(page.doc, { emitUpdate: false })
     category = page.category
-    $('categories').value = category
+    markCategory()
     currentDate = page.date
     today = page.today
     revisions.set(noteKey(category, currentDate), page.rev)
@@ -210,12 +228,12 @@ async function loadNote(date, selected = category) {
     drawDate()
     drawProgress()
     noteStatus('已保存')
-    showView('note')
+    if (navigate) showView('note')
   } catch (error) {
     if (request !== pageRequest) return
     noteStatus(errorMessage(error), true)
-    $('categories').value = category
-    showView('note')
+    markCategory()
+    if (navigate) showView('note')
   }
 }
 
@@ -288,9 +306,20 @@ $('reload-shared-note').onclick = async () => {
   noteStatus('已加载主机内容，原稿可在下方复制。')
 }
 for (const back of document.querySelectorAll('.back')) back.onclick = () => showView('note')
-$('categories').onchange = () => {
-  const selected = $('categories').value
+$('categories').onclick = event => {
+  const selected = event.target.closest('[role=tab]')?.dataset.category
+  if (!selected || selected === category) return
   void loadNote(visited.get(selected), selected)
+}
+$('categories').onkeydown = event => {
+  const tabs = [...$('categories').children]
+  const index = tabs.indexOf(event.target)
+  const jump = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 }[event.key]
+  if (index < 0 || jump === undefined) return
+  event.preventDefault()
+  const next = tabs[(jump + tabs.length) % tabs.length]
+  next.focus()
+  next.click()
 }
 $('new-category').onclick = () => {
   $('category-form').hidden = false
@@ -590,7 +619,23 @@ if (api.floatingPet) document.addEventListener('visibilitychange', () => {
   if (!document.hidden && view === 'settings') void refreshMobilePet()
 })
 
-let syncState, qrRequest = 0
+let syncState, qrRequest = 0, stopHostLink, hostLinkRevision = 0
+const syncPathLabel = via => via === 'direct' ? '点对点直连' : via === 'relay' ? '加密中继' : ''
+
+async function connectHostLink() {
+  const revision = ++hostLinkRevision
+  stopHostLink?.()
+  const config = await api.syncLink()
+  if (!config || revision !== hostLinkRevision) return
+  stopHostLink = hostSyncLink(config, api.syncExchange, status => {
+    void api.syncLinkStatus(status, config.room).then(value => {
+      if (revision !== hostLinkRevision) return
+      drawSync(value)
+      if (view === 'sync') return showPairing()
+    }).catch(error => { $('sync-status').textContent = errorMessage(error) })
+  })
+}
+
 function drawSync(value) {
   syncState = value
   const mobile = value.role === 'mobile'
@@ -599,31 +644,31 @@ function drawSync(value) {
   $('api-settings').hidden = mobile && value.enabled
   $('mobile-ai-host').hidden = !mobile || !value.enabled
   if (mobile) {
+    $('note-locked').textContent = !value.enabled ? '正在同步 · 请先配对主机'
+      : value.error ? '正在同步 · 等待主机重新连接' : '正在同步，完成后可编辑便签。'
     $('sync-now').hidden = !value.enabled
     $('sync-unpair').hidden = !value.enabled
     $('sync-status').textContent = value.error || (value.locked ? '设备同步中，便签只读' : value.enabled
-      ? '主机 ' + value.host + (value.last ? ' · ' + new Date(value.last).toLocaleTimeString() : ' · 等待首次同步')
+      ? [syncPathLabel(value.via) || '已配对', value.last ? new Date(value.last).toLocaleTimeString() : '等待首次同步'].join(' · ')
       : '从桌面主机获取配对码或二维码。')
     return
   }
   $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
-  $('sync-host-details').hidden = !value.enabled
-  $('sync-status').textContent = value.enabled ? (value.addresses.length ? '主机正在监听 TCP ' + value.port : '主机正在运行，等待可用网络地址') : '将这台电脑设为便签和 AI 的主机。'
-  const previous = $('sync-address').value
-  const choices = value.endpoints ?? value.addresses.map(address => ({ address }))
-  $('sync-address').replaceChildren(...choices.map(({ address, name, tailscale }) =>
-    new Option((tailscale ? 'Tailscale · ' : name ? name + ' · ' : '') + address, address)))
-  if (value.addresses.includes(previous)) $('sync-address').value = previous
+  $('sync-host-details').hidden = value.status !== 'online' || !value.enabled
+  $('sync-relay').disabled = value.enabled
+  if (!$('sync-relay').value && value.relay) $('sync-relay').value = value.relay
+  $('sync-status').textContent = value.enabled
+    ? { online: '主机已在线，可以扫码配对。', connecting: '正在连接异地同步服务…', offline: '异地同步服务暂不可达，正在重试。' }[value.status]
+    : '将这台电脑设为便签和 AI 的主机。'
 }
 
 async function showPairing() {
   const request = ++qrRequest
-  const address = $('sync-address').value
   $('sync-qr').hidden = true
   $('sync-qr').removeAttribute('src')
   $('sync-code').value = ''
-  if (view !== 'sync' || !address || !syncState?.enabled) return
-  const code = await api.syncCode(address)
+  if (view !== 'sync' || syncState?.status !== 'online' || !syncState.enabled) return
+  const code = await api.syncCode()
   if (view !== 'sync' || request !== qrRequest) return
   $('sync-code').value = code
   const qr = await import('qrcode')
@@ -649,13 +694,24 @@ async function syncAction(operation, button) {
 $('settings-sync').onclick = () => {
   showView('sync')
   $('sync-test-status').textContent = ''
-  void syncAction(() => api.syncState())
+  void syncAction(async () => {
+    const result = await api.syncState()
+    if (!api.mobile) $('sync-relay-settings').open = !result.relay
+    return result
+  })
 }
 $('sync-back').onclick = () => showView('settings')
-$('sync-enable').onclick = () => syncAction(() => api.enableSync(!syncState.enabled), $('sync-enable'))
-$('sync-address').onchange = () => syncAction(() => showPairing())
+$('sync-enable').onclick = () => syncAction(async () => {
+  await api.enableSync(!syncState.enabled, $('sync-relay').value)
+  await connectHostLink()
+  return api.syncState()
+}, $('sync-enable'))
 $('sync-code').onclick = event => event.currentTarget.select()
-$('sync-rotate').onclick = () => syncAction(() => api.rotateSync(), $('sync-rotate'))
+$('sync-rotate').onclick = () => syncAction(async () => {
+  await api.rotateSync()
+  await connectHostLink()
+  return api.syncState()
+}, $('sync-rotate'))
 $('sync-now').onclick = () => syncAction(() => api.runSync(), $('sync-now'))
 $('sync-test').onclick = async event => {
   const button = event.currentTarget
@@ -663,8 +719,8 @@ $('sync-test').onclick = async event => {
   button.disabled = true
   status.textContent = '正在验证主机连接…'
   try {
-    const host = await api.testSync($('sync-pair-code').value)
-    status.textContent = '已连通 ' + host + '，配对码可用。'
+    const path = await api.testSync($('sync-pair-code').value)
+    status.textContent = '已通过' + syncPathLabel(path) + '连通主机，配对码可用。'
   } catch (error) {
     status.textContent = errorMessage(error)
   } finally {
@@ -789,8 +845,9 @@ const questionRequest = () => ({
 for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'issues']]) {
   $(button).onclick = () => api.openProject(target).catch(error => noteStatus(errorMessage(error), true))
 }
-wireCodex(api, showView, errorMessage)
+const codexView = wireCodex(api, showView, errorMessage)
 let noteJob
+let profileRevision = 0
 $('ai-cancel').onclick = () => {
   if (noteJob?.turnId) void api.codex('interrupt', noteJob.id).catch(error => {
     $('answer').textContent = errorMessage(error)
@@ -802,30 +859,39 @@ $('ai-form').onsubmit = async event => {
   if (!question) return
   const answer = $('answer')
   const send = $('send-question')
+  const profile = profileRevision
   send.disabled = true
   answer.hidden = false
   answer.classList.remove('error')
   answer.textContent = '正在读取便签并生成回答…'
   try {
     await saveBeforeSwitch()
-    if ($('ai-provider').value === 'api') answer.textContent = await api.ask(questionRequest())
+    if ($('ai-provider').value === 'api') {
+      const response = await api.ask(questionRequest())
+      if (profile === profileRevision) answer.textContent = response
+    }
     else {
       const started = await api.codex('notes', { ...questionRequest(), model: noteModel.value() })
+      if (profile !== profileRevision) return
       const completed = await followCodex(api, started, job => {
         noteJob = job
         $('ai-cancel').hidden = !job.turnId || job.status !== 'running'
         const detail = job.retrying && job.status === 'running' ? '主机正在重新连接 Codex…' : ''
         answer.textContent = job.label + '\n\n' + ([job.output, detail].filter(Boolean).join('\n\n') || '正在主机上读取便签并回答…')
-      })
+      }, () => profile === profileRevision)
+      if (!completed || profile !== profileRevision) return
       if (completed.status === 'failed') throw new Error(completed.error)
       if (completed.status === 'interrupted') answer.textContent += '\n\n已停止'
     }
   } catch (error) {
+    if (profile !== profileRevision) return
     answer.classList.add('error')
     answer.textContent = errorMessage(error)
   } finally {
-    $('ai-cancel').hidden = true
-    send.disabled = false
+    if (profile === profileRevision) {
+      $('ai-cancel').hidden = true
+      send.disabled = false
+    }
   }
 }
 
@@ -880,6 +946,28 @@ async function init() {
   api.onBrowser(drawBrowser)
   api.onNotes(async change => {
     if (!state) return
+    if (change.profileChanged) {
+      ++profileRevision
+      ++editGeneration
+      currentDate = undefined
+      category = defaultCategory
+      revisions.clear()
+      visited.clear()
+      previousSaveError = retryOnUnlock = false
+      noteJob = undefined
+      $('prompt').value = ''
+      $('answer').textContent = ''
+      $('answer').hidden = $('ai-cancel').hidden = true
+      $('send-question').disabled = false
+      $('saved-editor-draft').value = $('sync-draft-text').value = ''
+      $('saved-editor-draft').hidden = $('sync-draft-text').hidden = $('reload-shared-note').hidden = true
+      codexView.reset()
+      editor.commands.clearContent(false)
+      state.categories = change.categories
+      drawCategories(change.categories)
+      void loadNote(undefined, defaultCategory, false)
+      return
+    }
     if (change.openToday) {
       void loadNote(undefined, defaultCategory)
       return
@@ -908,6 +996,7 @@ async function init() {
     }
   })
   api.onSync?.(drawSync)
+  if (!api.mobile) void connectHostLink().catch(error => { $('sync-status').textContent = errorMessage(error) })
   api.onDay(next => {
     followNewDay ||= currentDate === today
     today = next

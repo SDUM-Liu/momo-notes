@@ -1,6 +1,6 @@
 import { gcm } from '@noble/ciphers/aes.js'
+import { sha256 } from '@noble/hashes/sha2.js'
 
-export const syncPort = 38425
 export const wireLimit = 32 * 1024 * 1024
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -9,24 +9,38 @@ function fromHex(value) {
   return Uint8Array.from(value.match(/../g), byte => Number.parseInt(byte, 16))
 }
 
-export function validHost(host) {
-  return typeof host === 'string' && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
-    && host.split('.').every(part => +part <= 255 && String(+part) === part)
+export const relayProtocol = 'momo-sync-v1'
+export const roomPattern = /^[a-f0-9]{64}$/
+
+export function relayOrigin(value) {
+  const url = new URL(String(value ?? '').trim())
+  const loopback = ['localhost', '127.0.0.1'].includes(url.hostname)
+  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+      || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('请输入有效的 HTTPS 同步服务地址')
+  return url.origin
 }
 
-export function tailscaleAddress(host) {
-  const [first, second] = String(host).split('.').map(Number)
-  return first === 100 && second >= 64 && second <= 127
+export const digest = value => hex(sha256(encoder.encode(value)))
+export const transferId = () => hex(crypto.getRandomValues(new Uint8Array(16)))
+
+export function joinToken(key) {
+  return digest('momo-sync-v2/join/' + key)
 }
 
-export function pairingCode(host, key) {
-  return 'momo1:' + host + ':' + key
+export function pairingCode(relay, room, key) {
+  return 'momo2:' + btoa(JSON.stringify([relay, room, key])).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
 }
 
 export function parsePairing(value) {
-  const parts = /^momo1:([^:]+):([a-f0-9]{64})$/.exec(String(value).trim())
-  if (!parts || !validHost(parts[1])) throw new Error('请复制完整的主机配对码')
-  return { host: parts[1], port: syncPort, key: parts[2] }
+  const code = String(value).trim()
+  if (code.startsWith('momo1:')) throw new Error('这是旧版配对码，请在新版主机重新生成二维码')
+  if (code.length <= 480 && /^momo2:[\w-]+$/.test(code)) {
+    try {
+      const [relay, room, key] = JSON.parse(atob(code.slice(6).replaceAll('-', '+').replaceAll('_', '/')))
+      if (roomPattern.test(room) && roomPattern.test(key)) return { relay: relayOrigin(relay), room, key }
+    } catch {}
+  }
+  throw new Error('请复制完整的主机配对码')
 }
 
 function b64(bytes) {

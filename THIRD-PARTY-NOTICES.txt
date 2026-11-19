@@ -1031,6 +1031,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 Pairing and QR dependencies
 
 @noble/ciphers 2.4.0
+@noble/hashes 2.4.0
 
 The MIT License (MIT)
 

@@ -1,31 +1,23 @@
-import { parsePairing, seal, unseal, wireLimit, tailscaleAddress, syncPort } from '../shared/sync.mjs'
+import { parsePairing, seal, unseal, wireLimit } from '../shared/sync.mjs'
 
-function connectionError(host, error) {
-  if (error.code === 'SYNC_LOCAL_NETWORK') return error
-  const address = host + ':' + syncPort
-  if (error.code === 'SYNC_AUTH') return new Error('已连到 ' + address + '，但主机未接受配对。请从当前主机重新复制完整配对码，并检查两端的系统时间。')
-  const network = tailscaleAddress(host) ? '确认两端的 Tailscale 都在线、属于同一网络，且允许访问主机。'
-    : '确认两端在同一局域网。若手机不在该网络，请使用主机生成的 Tailscale 配对码。'
-  return new Error('无法连接 ' + address + '。请确认主机同步已开启、系统防火墙允许连接。' + network)
-}
-
-export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, markForUpload, keepDraft, change }) {
-  let pair, running, probing, peerLocked = true, last = '', error = ''
-  const state = () => ({ role: 'mobile', enabled: Boolean(pair), host: pair?.host, last, error,
-    locked: Boolean(pair && (running || peerLocked)) })
+export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change }) {
+  let pair, running, probing, switching, verified = false, peerLocked = true, last = '', error = ''
+  let via
+  const state = () => ({ role: 'mobile', enabled: Boolean(pair), via, last, error,
+    locked: !pair || !verified || Boolean(running || switching || peerLocked) })
   async function request(connection, op, payload, token) {
     const bytes = crypto.getRandomValues(new Uint8Array(12))
     const id = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
     const message = seal(connection.key, 'request', { id, time: Date.now(), op, payload, token })
     if (message.length > wireLimit) throw new Error('便签超出单页同步上限')
-    let reply
-    try { reply = await exchange({ host: connection.host, message }) } catch (error) { throw connectionError(connection.host, error) }
+    const reply = await exchange(connection, message)
     let response
     try { response = unseal(connection.key, 'reply/' + id, reply.message) } catch {
-      throw connectionError(connection.host, { code: 'SYNC_AUTH' })
+      throw new Error('主机回复验证失败，请用主机重新生成的配对码重试')
     }
+    if (connection === pair) via = reply.via
     if (!response.ok) throw Object.assign(new Error(response.error), { code: response.code })
-    return response.value
+    return op === 'test' ? reply.via : response.value
   }
 
   const index = connection => request(connection, 'index')
@@ -35,55 +27,48 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     if (!connection || running) return
     if (probing) return probing
     probing = (async () => {
+      let recover = false
       try {
         const result = await request(connection, 'state')
         if (connection !== pair || running) return
         peerLocked = result.locked
-        if (!peerLocked) error = ''
+        recover = !peerLocked && !verified
       } catch (failure) {
         if (connection !== pair || running) return
         peerLocked = true
+        verified = false
         error = failure.message
       } finally {
         probing = null
         change(state())
       }
+      if (recover) void run().catch(() => {})
     })()
     return probing
   }
 
   async function run() {
     if (!pair) return state()
-    if (running) return running
+    if (running) { await running; return state() }
+    if (switching) return state()
     const connection = pair
-    const snapshot = await index(connection).catch(failure => {
-      if (connection === pair) {
-        peerLocked = true
-        error = failure.message
-        change(state())
-      }
-      throw failure
-    })
-    if (connection !== pair) return state()
-    if (running) return running
-    peerLocked = snapshot.locked
-    if (peerLocked) {
-      change(state())
-      return state()
-    }
-    const known = new Set(snapshot.categories.map(item => item.id))
-    const extra = categories().filter(item => !known.has(item.id))
-    const dirty = Object.values(records).some(record => record.dirty)
-    const outdated = Object.entries(snapshot.revisions).some(([key, rev]) => records[key]?.rev !== rev)
-    if (!extra.length && !dirty && !outdated) {
-      last = new Date().toISOString()
-      error = ''
-      change(state())
-      return state()
-    }
     running = (async () => {
       let token
       try {
+        const snapshot = await index(connection)
+        peerLocked = snapshot.locked
+        if (peerLocked) { verified = false; return }
+        const known = new Set(snapshot.categories.map(item => item.id))
+        const extra = categories().filter(item => !known.has(item.id))
+        const dirty = Object.values(records).some(record => record.dirty)
+        const outdated = Object.entries(snapshot.revisions).some(([key, rev]) => records[key]?.rev !== rev)
+        await setCategories(snapshot.categories)
+        if (!extra.length && !dirty && !outdated) {
+          verified = true
+          last = new Date().toISOString()
+          error = ''
+          return
+        }
         const response = await request(connection, 'begin', extra)
         token = response.token
         await setCategories(response.categories)
@@ -107,34 +92,45 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
           const updated = await request(connection, 'get', key, token)
           if (updated.doc) await accept(key, current, updated, false)
         }
+        await request(connection, 'finish', undefined, token)
+        token = undefined
+        verified = true
         last = new Date().toISOString()
         error = ''
       } catch (failure) {
+        verified = false
+        peerLocked = true
         error = failure.message
         throw failure
       } finally {
         if (token) await request(connection, 'finish', undefined, token).catch(() => {})
         running = null
-        await probe()
+        change(state())
       }
-      return state()
     })()
     change(state())
-    return running
+    await running
+    return state()
   }
 
   return {
     state,
     run,
     probe,
+    disconnected(connection) {
+      if (!pair || pair.key !== connection.key || pair.room !== connection.room || pair.relay !== connection.relay) return
+      peerLocked = true
+      verified = false
+      error = '主机连接中断，等待重新同步'
+      change(state())
+    },
     async test(code) {
       const connection = String(code ?? '').trim() ? parsePairing(code) : pair
       if (!connection) throw new Error('请先输入主机配对码')
-      await request(connection, 'state')
-      return connection.host
+      return request(connection, 'test')
     },
     async edit(payload) {
-      if (state().locked) throw new Error('同步中或主机未连接，当前修改暂未保存')
+      if (state().locked) throw new Error('正在同步，完成后可编辑便签')
       try {
         return await request(pair, 'edit', payload)
       } catch (failure) {
@@ -144,33 +140,48 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       }
     },
     async addCategory(item) {
-      if (state().locked) throw new Error('同步中或主机未连接，分类暂不可修改')
+      if (state().locked) throw new Error('正在同步，完成后可新建分类')
       return request(pair, 'category', item)
     },
     async init() {
       const code = await loadCode()
       if (code) {
-        try { pair = parsePairing(code) } catch { error = '配对码失效，请重新配对' }
+        try { pair = parsePairing(code) } catch (failure) { error = failure.message }
       }
+      await activate(pair, code)
     },
     async pairWith(code) {
       const next = parsePairing(code)
-      if (running) await running.catch(() => {})
-      const remote = await index(next)
-      if (pair?.key !== next.key) await markForUpload(remote.revisions)
-      await saveCode(String(code).trim())
-      pair = next
-      peerLocked = remote.locked
+      if (switching) throw new Error('正在切换设备，请稍候')
+      switching = true
       change(state())
+      try {
+        if (running) await running.catch(() => {})
+        await index(next)
+        await saveCode(String(code).trim())
+        await activate(next)
+        pair = next
+        verified = false
+        peerLocked = true
+        last = ''
+        error = ''
+      } finally { switching = false; change(state()) }
       return run()
     },
     async unpair() {
-      if (running) await running.catch(() => {})
-      await saveCode('')
-      pair = undefined
-      peerLocked = true
-      last = error = ''
+      if (switching) throw new Error('正在切换设备，请稍候')
+      switching = true
       change(state())
+      try {
+        if (running) await running.catch(() => {})
+        await saveCode('')
+        pair = undefined
+        verified = false
+        via = undefined
+        peerLocked = true
+        last = error = ''
+        await activate(undefined)
+      } finally { switching = false; change(state()) }
       return state()
     },
     async ask(payload) {

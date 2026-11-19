@@ -1,9 +1,7 @@
-const net = require('node:net')
-const os = require('node:os')
 const path = require('node:path')
 const fs = require('node:fs')
-const { randomBytes } = require('node:crypto')
-const { seal, unseal, syncPort, wireLimit, pairingCode, tailscaleAddress } = require('../shared/sync.mjs')
+const { randomBytes, createHash } = require('node:crypto')
+const { seal, unseal, wireLimit, pairingCode, relayOrigin } = require('../shared/sync.mjs')
 const { noteIdentity, noteKey, localDay, validateCategory, hasContent } = require('../shared/notes.mjs')
 const { revisionOf } = require('./data.cjs')
 
@@ -11,8 +9,7 @@ function createSync(directory, store, ask, notify, codex) {
   const filename = path.join(directory, 'sync.json')
   const config = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {}
   const replay = new Map()
-  const sockets = new Set()
-  let server, starting, lease, leaseTimer
+  let lease, leaseTimer
 
   function unlock() {
     if (!lease) return
@@ -35,17 +32,14 @@ function createSync(directory, store, ask, notify, codex) {
     fs.renameSync(filename + '.tmp', filename)
   }
 
-  function endpoints() {
-    const entries = Object.entries(os.networkInterfaces()).filter(([name]) => !/vethernet|loopback|vmware|virtualbox|wsl/i.test(name))
-      .flatMap(([name, list]) => list.filter(item => item.family === 'IPv4' && !item.internal && !item.address.startsWith('169.254.'))
-        .map(item => ({ address: item.address, name, tailscale: tailscaleAddress(item.address) })))
-    return entries.sort((a, b) => Number(b.tailscale) - Number(a.tailscale))
-  }
+  const defaultRelay = process.env.MOMO_RELAY_URL || require('../shared/relay.json').url
+  const relay = () => config.relay || defaultRelay
+  const enabled = () => Boolean(config.enabled && config.owner && config.key && relay())
+  const room = () => createHash('sha256').update(config.owner).digest('hex')
+  let status = 'offline'
 
   function state() {
-    const choices = endpoints()
-    return { role: 'host', enabled: Boolean(server?.listening), addresses: choices.map(item => item.address),
-      endpoints: choices, port: syncPort, locked: Boolean(lease) }
+    return { role: 'host', enabled: enabled(), relay: relay(), status, locked: Boolean(lease) }
   }
 
   function put({ key, doc, base }, remote = true) {
@@ -63,7 +57,7 @@ function createSync(directory, store, ask, notify, codex) {
   }
 
   async function processRequest({ op, payload, token }) {
-    if (op === 'state') return { locked: Boolean(lease) }
+    if (op === 'state' || op === 'test') return { locked: Boolean(lease) }
     if (op === 'index') return { categories: store.data.categories, revisions: store.data.revisions, locked: Boolean(lease) }
     if (op === 'edit' || op === 'category') {
       requireWritable()
@@ -111,90 +105,42 @@ function createSync(directory, store, ask, notify, codex) {
     throw new Error('未知的同步请求')
   }
 
-  function connection(socket) {
-    if (sockets.size >= 12) return socket.destroy()
-    sockets.add(socket)
-    const chunks = []
-    let size = 0
-    socket.setTimeout(10000, () => socket.destroy())
-    socket.on('error', () => {})
-    socket.on('close', () => sockets.delete(socket))
-    socket.on('data', async chunk => {
-      size += chunk.length
-      if (size > wireLimit + 1) return socket.destroy()
-      chunks.push(chunk)
-      if (!chunk.includes(10)) return
-      socket.pause()
-      const wire = Buffer.concat(chunks).toString('ascii').split('\n', 1)[0]
-      let request
-      try {
-        request = unseal(config.key, 'request', wire)
-        const now = Date.now()
-        if (!/^[a-f0-9]{24}$/.test(request.id) || !Number.isFinite(request.time) || replay.has(request.id)) return socket.destroy()
-        if (Math.abs(now - request.time) > 120000) {
-          const error = '主机与手机的时钟相差超过两分钟，请开启系统自动设置时间后重试'
-          return socket.end(seal(config.key, 'reply/' + request.id, { ok: false, code: 'SYNC_CLOCK', error }) + '\n')
-        }
-        for (const [id, expires] of replay) if (expires <= now) replay.delete(id)
-        if (replay.size >= 10000) return socket.destroy()
-        replay.set(request.id, now + 240000)
-        socket.setTimeout(65000)
-      } catch {
-        return socket.destroy()
-      }
-      let response
-      try {
-        response = { ok: true, value: await processRequest(request) }
-      } catch (error) {
-        response = { ok: false, error: error.message, code: error.code }
-      }
-      const message = seal(config.key, 'reply/' + request.id, response)
-      if (message.length > wireLimit) {
-        socket.end(seal(config.key, 'reply/' + request.id, { ok: false, error: '便签超出单页同步上限' }) + '\n')
-      } else socket.end(message + '\n')
-    })
-  }
-
-  async function enable() {
-    if (server?.listening) return state()
-    if (starting) return starting
-    starting = new Promise((resolve, reject) => {
-      const next = net.createServer(connection)
-      next.once('error', reject)
-      next.listen(syncPort, '0.0.0.0', () => {
-        try {
-          config.key ||= randomBytes(32).toString('hex')
-          config.enabled = true
-          persist()
-          next.removeListener('error', reject)
-          next.on('error', error => console.error('Sync server failed:', error.message))
-          server = next
-          resolve(state())
-        } catch (error) {
-          next.close()
-          reject(error)
-        }
-      })
-    })
-    try {
-      return await starting
-    } finally {
-      starting = null
+  async function exchange(wire) {
+    if (!enabled() || typeof wire !== 'string' || wire.length > wireLimit) return null
+    const key = config.key
+    let request
+    try { request = unseal(key, 'request', wire) } catch { return null }
+    const now = Date.now()
+    if (!/^[a-f0-9]{24}$/.test(request?.id) || !Number.isFinite(request.time) || replay.has(request.id)) return null
+    if (Math.abs(now - request.time) > 120000) {
+      const error = '主机与手机的时钟相差超过两分钟，请开启系统自动设置时间后重试'
+      return seal(key, 'reply/' + request.id, { ok: false, code: 'SYNC_CLOCK', error })
     }
+    for (const [id, expires] of replay) if (expires <= now) replay.delete(id)
+    if (replay.size >= 10000) return null
+    replay.set(request.id, now + 240000)
+    let response
+    try { response = { ok: true, value: await processRequest(request) } }
+    catch (error) { response = { ok: false, error: error.message, code: error.code } }
+    if (key !== config.key || !enabled()) return null
+    const message = seal(key, 'reply/' + request.id, response)
+    if (message.length <= wireLimit) return message
+    return seal(key, 'reply/' + request.id, { ok: false, error: '便签超出单页同步上限' })
   }
 
-  function stop() {
-    server?.close()
-    server = null
-    for (const socket of sockets) socket.destroy()
-    unlock()
-  }
-
-  async function setEnabled(enabled) {
-    if (enabled) return enable()
-    if (starting) await starting.catch(() => {})
-    stop()
-    config.enabled = false
+  function setEnabled(value, endpoint) {
+    if (value) {
+      const url = String(endpoint || relay()).trim()
+      if (!url) throw new Error('请先填写异地同步服务地址')
+      config.relay = relayOrigin(url)
+      config.key ||= randomBytes(32).toString('hex')
+      config.owner ||= randomBytes(32).toString('hex')
+      status = 'connecting'
+    } else {
+      unlock()
+      status = 'offline'
+    }
+    config.enabled = Boolean(value)
     persist()
     return state()
   }
@@ -207,16 +153,27 @@ function createSync(directory, store, ask, notify, codex) {
       return put(payload, false)
     },
     setEnabled,
-    restore: () => config.enabled ? enable() : Promise.resolve(state()),
-    stop,
-    code(host) {
-      if (!server?.listening || !endpoints().some(item => item.address === host)) throw new Error('请先开启同步并选择主机地址')
-      return pairingCode(host, config.key)
+    exchange,
+    link() {
+      if (!enabled() || !config.key || !config.owner) return null
+      return { relay: relay(), room: room(), key: config.key, owner: config.owner }
+    },
+    status(value, roomId) {
+      if (enabled() && config.owner && roomId === room() && ['online', 'offline', 'connecting'].includes(value)) status = value
+      return state()
+    },
+    stop: unlock,
+    code() {
+      if (!enabled() || status !== 'online') throw new Error('请先等待主机连上异地同步服务')
+      return pairingCode(relay(), room(), config.key)
     },
     rotate() {
+      if (!enabled()) throw new Error('请先开启主机同步')
       config.key = randomBytes(32).toString('hex')
+      config.owner = randomBytes(32).toString('hex')
       persist()
-      for (const socket of sockets) socket.destroy()
+      replay.clear()
+      status = 'connecting'
       unlock()
       return state()
     },

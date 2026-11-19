@@ -6,6 +6,8 @@ import { defaultSettings, defaultCategory, builtInCategories, datesFor, hasConte
 import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
 import { webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
+import { mobileSyncLink } from './rtc-sync.js'
+import { digest } from '../shared/sync.mjs'
 
 const keyName = 'ai-key'
 const noop = () => {}
@@ -44,6 +46,7 @@ export function createMobileBridge() {
   const notes = Object.create(null)
   const records = Object.create(null)
   let localDrafts = {}
+  let namespace = ''
   let categories = [...builtInCategories]
   let writes = Promise.resolve()
   let mode = 'note'
@@ -90,9 +93,14 @@ export function createMobileBridge() {
   }
 
   async function writeRecord(key, record) {
-    await transaction(await ready, 'notes', true, store => store.put({ date: key, ...record }))
+    await transaction(await ready, 'notes', true, store => store.put({ date: namespace + key, ...record }))
     records[key] = record
     notes[key] = record.doc
+  }
+
+  async function keepDraft(key, doc) {
+    localDrafts = { ...localDrafts, [key]: doc }
+    await transaction(await ready, 'settings', true, store => store.put(localDrafts, namespace + 'drafts'))
   }
 
   function saveNote(date, doc, category = defaultCategory, base) {
@@ -100,23 +108,52 @@ export function createMobileBridge() {
     return queueWrite(async () => {
       const previous = records[key]
       const rev = previous?.dirty || base === undefined ? (previous?.rev ?? null) : base
-      if (sync.state().enabled) {
-        const saved = await sync.edit({ key, doc, base: rev })
-        await writeRecord(key, { doc: saved.doc, rev: saved.rev, dirty: false })
-        updateWidget()
-        return saved
-      }
-      await writeRecord(key, { doc, rev, dirty: true })
+      const saved = await sync.edit({ key, doc, base: rev }).catch(async error => {
+        if (namespace && error.code !== 'NOTE_STALE') await keepDraft(key, doc)
+        throw error
+      })
+      await writeRecord(key, { doc: saved.doc, rev: saved.rev, dirty: false })
       updateWidget()
-      return { key, doc, rev }
+      return saved
     })
   }
 
-  async function ensurePage(category, date) {
-    if (sync.state().enabled) return
-    const key = noteKey(category, date)
-    if (!records[key]) await queueWrite(async () => {
-      if (!records[key]) await writeRecord(key, { doc: newDayNote(notes, category, date), rev: null, dirty: false })
+  async function activate(connection, oldCode) {
+    return queueWrite(async () => {
+      const db = await ready
+      const next = connection ? digest('momo-notes/cache/' + connection.key) + '/' : ''
+      const oldKey = /^momo1:[^:]+:([a-f0-9]{64})$/.exec(oldCode || '')?.[1]
+      let legacyProfile = await transaction(db, 'settings', false, store => store.get('legacy-profile'))
+      if (!legacyProfile && oldKey) {
+        legacyProfile = digest('momo-notes/cache/' + oldKey) + '/'
+        await transaction(db, 'settings', true, store => store.put(legacyProfile, 'legacy-profile'))
+      }
+      const saved = await transaction(db, 'notes', false, store => store.getAll())
+      const loaded = saved.filter(item => next ? item.date.startsWith(next) : !item.date.includes('/'))
+      // A legacy cache is reusable only by the host that has the same encryption key.
+      const migrating = next && !loaded.length && next === legacyProfile
+      const hidden = !next && Boolean(legacyProfile)
+      const previous = migrating ? '' : next
+      const storedCategories = hidden ? null : await transaction(db, 'settings', false, store => store.get(previous + 'categories'))
+      const storedDrafts = hidden ? null : await transaction(db, 'settings', false, store => store.get(previous + 'drafts'))
+      const source = hidden ? [] : migrating ? saved.filter(item => !item.date.includes('/')) : loaded
+
+      namespace = next
+      for (const key of Object.keys(records)) { delete records[key]; delete notes[key] }
+      categories = storedCategories ?? [...builtInCategories]
+      localDrafts = storedDrafts ?? {}
+      for (const { date, doc, rev, dirty } of source) {
+        const key = date.slice(previous.length)
+        const record = { doc, rev: rev ?? null, dirty: dirty ?? hasContent(doc) }
+        if (migrating) await writeRecord(key, record)
+        else { records[key] = record; notes[key] = doc }
+      }
+      if (migrating) {
+        await transaction(db, 'settings', true, store => store.put(categories, namespace + 'categories'))
+        await transaction(db, 'settings', true, store => store.put(localDrafts, namespace + 'drafts'))
+      }
+      onNotes({ categories, profileChanged: true })
+      updateWidget()
     })
   }
 
@@ -124,7 +161,7 @@ export function createMobileBridge() {
     return queueWrite(async () => {
       const next = [...categories, ...incoming.filter(item => !categories.some(existing => existing.id === item.id))]
       if (next.length === categories.length) return
-      await transaction(await ready, 'settings', true, store => store.put(next, 'categories'))
+      await transaction(await ready, 'settings', true, store => store.put(next, namespace + 'categories'))
       categories = next
       onNotes({ categories })
     })
@@ -133,7 +170,6 @@ export function createMobileBridge() {
   async function refreshDay() {
     const date = localDay()
     if (date === today) return
-    await ensurePage(defaultCategory, date)
     const previous = today
     today = date
     updateWidget()
@@ -141,29 +177,19 @@ export function createMobileBridge() {
   }
 
   const runRefresh = () => refreshDay().catch(error => console.error(error))
+  const syncLink = mobileSyncLink(connection => sync.disconnected(connection))
   const sync = mobileSync({
-    exchange: params => syncTransport.exchange(params),
+    exchange: syncLink.exchange,
     loadCode: () => native ? SecureStorage.getItem('sync-pair').catch(() => null) : Promise.resolve(null),
     saveCode: code => {
       if (!native) throw new Error('请在移动安装版中配对')
       return code ? SecureStorage.setItem('sync-pair', code) : SecureStorage.removeItem('sync-pair')
     },
     records,
+    activate,
     categories: () => categories,
     setCategories: mergeCategories,
-    async keepDraft(key, doc) {
-      localDrafts = { ...localDrafts, [key]: doc }
-      await transaction(await ready, 'settings', true, store => store.put(localDrafts, 'drafts'))
-    },
-    markForUpload(remote) {
-      return queueWrite(async () => {
-        for (const [key, record] of Object.entries(records)) {
-          if (!record.dirty && hasContent(record.doc) && record.rev !== remote[key]) {
-            await writeRecord(key, { ...record, dirty: true })
-          }
-        }
-      })
-    },
+    keepDraft,
     accept(key, snapshot, value, pushed) {
       return queueWrite(async () => {
         const current = records[key]
@@ -186,13 +212,7 @@ export function createMobileBridge() {
   })
   const backgroundSync = () => sync.run().catch(noop)
   const init = ready.then(async db => {
-    for (const { date, doc, rev, dirty } of await transaction(db, 'notes', false, store => store.getAll())) {
-      notes[date] = doc
-      records[date] = { doc, rev: rev ?? null, dirty: dirty ?? hasContent(doc) }
-    }
     settings = { ...settings, ...await transaction(db, 'settings', false, store => store.get('user')) }
-    categories = await transaction(db, 'settings', false, store => store.get('categories')) ?? categories
-    localDrafts = await transaction(db, 'settings', false, store => store.get('drafts')) ?? {}
     await sync.init()
     if (native) {
       hasKey = Boolean(await SecureStorage.getItem(keyName).catch(() => null))
@@ -248,7 +268,11 @@ export function createMobileBridge() {
         if (floatingPet) await petOverlay.scanner({ active: false }).catch(noop)
       }
     },
-    unpairSync: sync.unpair,
+    async unpairSync() {
+      const result = await sync.unpair()
+      syncLink.close()
+      return result
+    },
     runSync: sync.run,
     codex: sync.codex,
     syncDrafts: () => localDrafts,
@@ -266,18 +290,17 @@ export function createMobileBridge() {
     },
     async listDates(category = defaultCategory) {
       await refreshDay()
-      await ensurePage(category, today)
-      return datesFor(notes, category, today)
+      const days = datesFor(notes, category, today)
+      return days.includes(today) ? days : [today, ...days]
     },
     async addCategory(name) {
       const item = newCategory(name)
-      await mergeCategories(sync.state().enabled ? await sync.addCategory(item) : [item])
+      await mergeCategories(await sync.addCategory(item))
       return categories
     },
     async openNote(date, category = defaultCategory) {
       await refreshDay()
       const day = date || today
-      if (!date) await ensurePage(category, day)
       const key = noteKey(category, day)
       if (!notes[key] && date && day !== today) throw new Error('日期页不存在')
       return { date: day, category, doc: notes[key] || newDayNote(notes, category, day), today, rev: records[key]?.rev ?? null }
