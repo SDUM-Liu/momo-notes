@@ -5,6 +5,7 @@ const { openStore } = require('./data.cjs')
 const { fit, position, center, nearestEdge } = require('./window.cjs')
 const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
+const { createInstallerDownloads } = require('./installers.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort } = require('../shared/ai.mjs')
@@ -17,7 +18,7 @@ if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-
 if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('ozone-platform', 'x11')
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
-let win, tray, store, drag, anchor, edge, today, dayTimer, updates, browser, sync, codex
+let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, browser, sync, codex
 let mode = 'pet'
 let quitting = false
 let asking = false
@@ -111,6 +112,9 @@ function registerIPC() {
   handle('updates:check', updates.check)
   handle('updates:download', updates.download)
   handle('updates:install', updates.install)
+  handle('installers:catalog', installers.catalog)
+  handle('installers:download', installers.download)
+  handle('installers:reveal', installers.reveal)
   handle('browser:open', browser.open)
   handle('browser:viewport', bounds => {
     if (mode === 'note' && Object.values(bounds).every(Number.isFinite)) browser.setViewport(bounds)
@@ -287,6 +291,9 @@ function start() {
     if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
   })
   updates.setAutomatic(store.data.settings.autoInstallUpdates)
+  installers = createInstallerDownloads(progress => {
+    if (!quitting && !win.isDestroyed()) win.webContents.send('installers:progress', progress)
+  })
   browser = createBrowser(win, value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
   })
@@ -332,6 +339,7 @@ if (app.requestSingleInstanceLock()) {
     quitting = true
     clearInterval(dayTimer)
     updates?.stop()
+    installers?.stop()
     sync?.stop()
     codex?.close()
   })

@@ -9,6 +9,7 @@ import { defaultCategory, nodeText, noteKey } from '../shared/notes.mjs'
 import { parsePairing } from '../shared/sync.mjs'
 import { hostSyncLink } from './rtc-sync.js'
 import { followCodex, wireCodex, wireModelPicker } from './codex-view.js'
+import { wireInstallerDownloads } from './installers-view.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
@@ -66,7 +67,7 @@ function showView(next) {
     $('sync-pair-code').value = ''
   }
   view = next
-  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync', 'codex']) {
+  for (const name of ['note', 'history', 'settings', 'ai', 'browser', 'sync', 'codex', 'installers']) {
     $(name + '-view').hidden = name !== next
   }
   $('history').classList.toggle('active', next === 'history')
@@ -846,6 +847,7 @@ for (const [button, target] of [['project-repo', 'repo'], ['project-issues', 'is
   $(button).onclick = () => api.openProject(target).catch(error => noteStatus(errorMessage(error), true))
 }
 const codexView = wireCodex(api, showView, errorMessage)
+wireInstallerDownloads(api, showView, errorMessage)
 let noteJob
 let profileRevision = 0
 $('ai-cancel').onclick = () => {

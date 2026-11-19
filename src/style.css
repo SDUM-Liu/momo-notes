@@ -154,6 +154,9 @@ time { font-size: 11px; color: var(--muted); }
 #update-status { color: var(--muted); font-size: 11px; min-height: 1.35em; }
 #update-status.error { color: #a0314c; }
 #update-progress { grid-column: 1 / -1; width: 100%; height: 8px; accent-color: #91475e; }
+#installer-progress { display: block; width: 100%; height: 8px; margin-top: 10px; accent-color: #91475e; }
+#installer-file, #installer-destination, #installer-status { overflow-wrap: anywhere; }
+#installer-file:empty, #installer-status:empty { display: none; }
 .update-setting { padding-inline: 10px; }
 .switch-row, .image-setting { display: flex; align-items: center; gap: 7px; min-height: 32px; }
 .switch-row { justify-content: space-between; cursor: pointer; border-bottom: 1px solid #f3e9ee; }

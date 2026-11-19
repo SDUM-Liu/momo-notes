@@ -120,6 +120,7 @@
         <label id="automatic-update-row" class="switch-row update-setting desktop-only">
           后台下载，退出时自动安装<input id="automatic-update" type="checkbox" role="switch">
         </label>
+        <button id="installer-settings" type="button" class="quiet">下载其他版本</button>
         <h2>AI 连接</h2>
         <p id="mobile-ai-host" hidden>配对后，AI API 由主机调用。</p>
         <fieldset id="api-settings" class="settings-group fields">
@@ -131,6 +132,24 @@
         </fieldset>
       </form>
       <div class="subfoot"><span id="settings-status" role="status"></span><button type="submit" form="settings-form" class="primary">保存设置</button></div>
+    </section>
+    <section id="installers-view" class="view sub-view" hidden>
+      <div class="subhead"><h1>安装包下载</h1><button id="installer-back" type="button" class="quiet">返回设置</button></div>
+      <div class="sync-body">
+        <form id="installer-fields" hidden>
+          <label>安装包平台<select id="installer-platform"></select></label>
+          <label>版本<select id="installer-version"></select></label>
+          <p id="installer-file"></p>
+          <p id="installer-destination"></p>
+          <div class="project-links">
+            <button id="installer-download" type="submit" class="primary">下载安装包</button>
+            <button id="installer-directory" type="button" class="quiet" hidden>打开下载目录</button>
+          </div>
+        </form>
+        <progress id="installer-progress" max="100" aria-label="安装包下载进度" hidden></progress>
+        <p id="installer-status" role="status"></p>
+        <button id="installer-refresh" type="button" class="quiet" hidden>重新读取版本</button>
+      </div>
     </section>
     <section id="sync-view" class="view sub-view" hidden>
       <div class="subhead"><h1>设备同步</h1><button id="sync-back" class="quiet">返回设置</button></div>

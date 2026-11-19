@@ -7,6 +7,7 @@ import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../share
 import { webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
+import { mobileInstallers } from './mobile-installers.js'
 import { digest } from '../shared/sync.mjs'
 
 const keyName = 'ai-key'
@@ -239,6 +240,7 @@ export function createMobileBridge() {
 
   return {
     mobile: true,
+    ...mobileInstallers(native, platform),
     platform,
     floatingPet,
     liveScan: native && Capacitor.isPluginAvailable('CapacitorBarcodeScanner'),
