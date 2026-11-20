@@ -1,121 +1,16 @@
-name: Platform builds
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
+name: iOS universal simulator build
+on: workflow_dispatch
 permissions:
   contents: read
-
 jobs:
-  desktop:
-    name: Desktop · ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows-x64
-            runner: windows-2025
-            command: npm run dist
-            files: |
-              release/*.exe
-              release/*.exe.blockmap
-              release/latest.yml
-          - name: Ubuntu-x64
-            runner: ubuntu-24.04
-            command: npm run dist:linux
-            files: |
-              release/*.AppImage
-              release/latest-linux.yml
-          - name: macOS-arm64
-            runner: macos-15
-            command: npm run dist:mac:preview -- --arm64
-            files: |
-              release/*.dmg
-              release/*.zip
-          - name: macOS-x64
-            runner: macos-15-intel
-            command: npm run dist:mac:preview -- --x64
-            files: |
-              release/*.dmg
-              release/*.zip
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: ${{ matrix.command }}
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.name }}
-          path: ${{ matrix.files }}
-          if-no-files-found: error
-
-  android:
-    name: Android · APK
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
-      - run: npm ci
-      - run: npm run mobile:sync -- android
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platforms;android-36 build-tools;36.0.0
-      - run: bash gradlew --no-daemon assembleRelease
-        working-directory: android
-      - name: Sign and verify the Android release
-        if: github.ref == 'refs/heads/main'
-        shell: bash
-        env:
-          ANDROID_RELEASE_KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
-          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
-        run: |
-          : "${ANDROID_RELEASE_KEYSTORE:?Missing Android release keystore}"
-          : "${ANDROID_RELEASE_KEY_PASSWORD:?Missing Android release keystore password}"
-          umask 077
-          temporary="$(mktemp -d)"
-          trap 'rm -f "$temporary/release.p12" "$temporary/aligned.apk"; rmdir "$temporary"' EXIT
-          printf '%s' "$ANDROID_RELEASE_KEYSTORE" | tr -d '\r\n' | base64 --decode > "$temporary/release.p12"
-          ANDROID_RELEASE_KEY_PASSWORD="$(printf '%s' "$ANDROID_RELEASE_KEY_PASSWORD" | tr -d '\r\n')"
-          build_tools="$ANDROID_HOME/build-tools/36.0.0"
-          output="android/app/build/outputs/apk/release"
-          "$build_tools/zipalign" -P 16 -f 4 "$output/app-release-unsigned.apk" "$temporary/aligned.apk"
-          "$build_tools/apksigner" sign --ks "$temporary/release.p12" --ks-type PKCS12 \
-            --ks-key-alias momo-notes --ks-pass env:ANDROID_RELEASE_KEY_PASSWORD \
-            --v4-signing-enabled false --out "$output/app-release.apk" "$temporary/aligned.apk"
-          verification="$("$build_tools/apksigner" verify --print-certs "$output/app-release.apk")"
-          fingerprint="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<< "$verification")"
-          [[ "$fingerprint" == "$(cat android/release-certificate.sha256)" ]]
-      - uses: actions/upload-artifact@v4
-        if: github.ref == 'refs/heads/main'
-        with:
-          name: Android
-          path: android/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-
   ios:
     name: iOS · simulator
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 088c4952dfcf4101dce8f35f93d27b4067b5c0f6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -125,10 +20,12 @@ jobs:
       - run: |
           version=$(node -p 'require("./package.json").version')
           xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator \
-            -derivedDataPath ios/build MARKETING_VERSION="$version" CODE_SIGNING_ALLOWED=NO build
+            -derivedDataPath ios/build MARKETING_VERSION="$version" CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=NO "ARCHS=arm64 x86_64" build
+          lipo -verify_arch arm64 x86_64 ios/build/Build/Products/Debug-iphonesimulator/App.app/App
           ditto -c -k --keepParent ios/build/Build/Products/Debug-iphonesimulator/App.app ios/Momo-Notes-iOS-Simulator.zip
       - uses: actions/upload-artifact@v4
         with:
           name: iOS-simulator
           path: ios/Momo-Notes-iOS-Simulator.zip
           if-no-files-found: error
+
