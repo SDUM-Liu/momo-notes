@@ -1,5 +1,11 @@
 {
   "appId": "io.github.sdumliu.momonotes",
   "appName": "桃桃便签",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "SystemBars": {
+      "style": "LIGHT",
+      "initialViewportFitValueHint": "cover"
+    }
+  }
 }

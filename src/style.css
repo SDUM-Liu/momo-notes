@@ -321,6 +321,19 @@ body[data-platform="mobile"] .panel {
   inset: 0;
   border: 0; border-radius: 0; box-shadow: none;
 }
+html:not([data-momo-floating="true"]) body[data-platform="mobile"] {
+  --momo-safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --momo-safe-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+  --momo-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --momo-safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+}
+html:not([data-momo-floating="true"]) body[data-platform="mobile"] :is(.panel, #ai-setup-dialog) {
+  inset: var(--momo-safe-top) var(--momo-safe-right) var(--momo-safe-bottom) var(--momo-safe-left);
+}
+html:not([data-momo-floating="true"]) body[data-platform="mobile"] #ai-setup-dialog {
+  width: min(440px, calc(100% - var(--momo-safe-left) - var(--momo-safe-right) - 24px));
+  max-height: calc(100% - var(--momo-safe-top) - var(--momo-safe-bottom) - 24px);
+}
 body[data-platform="mobile"] .mascot, body[data-platform="mobile"] #mobile-dismiss { display: none; }
 html[data-momo-floating="true"] body[data-mobile-os="android"] { background: transparent; }
 #mobile-dismiss { position: absolute; inset: 0; border: 0; padding: 0; background: #48344238; }

@@ -48,15 +48,19 @@ def click(name):
     shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
 
 
+def window_dump():
+    return re.split(r'(?=^\s+Window #\d+ Window\{)', shell('dumpsys', 'window', 'windows'), flags=re.M)
+
+
 def windows():
-    return [chunk for chunk in re.split(r'(?=^\s+Window #\d+ Window\{)', shell('dumpsys', 'window', 'windows'), flags=re.M)
-            if PACKAGE in chunk and 'ty=APPLICATION_OVERLAY' in chunk and 'mHasSurface=true' in chunk]
+    return [chunk for chunk in window_dump() if PACKAGE in chunk and 'ty=APPLICATION_OVERLAY' in chunk
+            and 'mHasSurface=true' in chunk]
 
 
 def frame_of(window):
     frame = re.search(r'\bframe=\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]', window)
     if not frame:
-        raise AssertionError('Could not locate the overlay window frame')
+        raise AssertionError('Could not locate the window frame')
     return tuple(map(int, frame.groups()))
 
 
@@ -71,6 +75,18 @@ def open_launcher_entry():
     wait_for(lambda: resumed(PACKAGE), bool, 'The app did not reach its foreground activity')
 
 
+def check_status_bar():
+    status = wait_for(lambda: next((window for window in window_dump()
+                      if re.match(r'\s*Window #\d+ Window\{[^\n]+ StatusBar\}:', window)
+                      and 'isVisible=true' in window), ''), bool, 'The Android status bar is not visible')
+    _, _, _, bottom = frame_of(status)
+    assert bottom > 0, 'The Android status bar has no height'
+    tree = wait_for(hierarchy, lambda root: find_node(root, '设置') is not None, 'The note toolbar is missing')
+    settings = find_node(tree, '设置')
+    _, top, _, _ = map(int, re.findall(r'\d+', settings.attrib['bounds']))
+    assert top >= bottom, f'The note toolbar starts at {top}, within the Android status bar ending at {bottom}'
+
+
 def main(apk):
     shell('wm', 'size', '1080x2160')
     shell('wm', 'density', '420')
@@ -79,6 +95,7 @@ def main(apk):
     print(adb('install', apk))
     adb('logcat', '-c')
     open_launcher_entry()
+    check_status_bar()
     click('设置')
     # This action is visible only when the pet is enabled and permission is still pending.
     click('授予悬浮窗权限')
@@ -103,6 +120,8 @@ def main(apk):
              'Dragging the note did not move the system window')
     open_launcher_entry()
     wait_for(windows, lambda items: not items, 'A launcher entry kept the note in a floating window')
+    check_status_bar()
+    print('PASS Android status bar stays visible and above the note toolbar on launch and after closing the overlay')
     print('PASS the app icon opens the editor, permission return starts the pet, and the pet opens a movable overlay')
 
 
