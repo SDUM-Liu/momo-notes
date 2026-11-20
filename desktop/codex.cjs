@@ -30,7 +30,7 @@ function splitNotes(entries) {
 
 function formatThread(thread, archived) {
   return {
-    id: thread.id, title: (thread.name || thread.preview || '未命名会话').slice(0, 100),
+    id: thread.id, title: thread.name || thread.preview?.slice(0, 100) || '未命名会话',
     status: thread.status?.type ?? 'unknown', cwd: thread.cwd,
     updatedAt: thread.updatedAt ?? thread.createdAt ?? 0, archived,
   }

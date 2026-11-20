@@ -129,6 +129,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
       const details = document.createElement('small')
       details.textContent = [item.cwd?.split(/[\\/]/).filter(Boolean).at(-1),
         item.archived && '已归档', item.shared && !api.mobile && '已共享'].filter(Boolean).join(' · ')
+      button.title = [item.title, details.textContent].filter(Boolean).join('\n')
       button.append(title, details)
       button.onclick = () => {
         select.value = item.id
