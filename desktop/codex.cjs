@@ -130,7 +130,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
   function configure(values) {
     if (activeRemote && (Object.hasOwn(values, 'folder')
         || (Object.hasOwn(values, 'write') && Boolean(values.write) !== Boolean(config.write)))) {
-      throw new Error('请先结束正在运行的 Codex 任务')
+      throw new Error('请先结束正在运行的桃桃 AI 任务')
     }
     const next = { ...config }
     if (Object.hasOwn(values, 'folder')) {
@@ -149,7 +149,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     await client.ready
     const result = await client.request('account/read', { refreshToken: false })
     if (!result.account || !['chatgpt', 'chatgptAuthTokens'].includes(result.account.type)) {
-      throw new Error('请在主机运行 codex login，并使用 ChatGPT 账号登录')
+      throw new Error('请在电脑上使用 ChatGPT 账号登录，步骤见「桃桃 AI → 配置教程」。')
     }
   }
 
@@ -204,7 +204,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
           const status = params.turn.status
           if (status === 'completed') resolve('completed')
           else if (status === 'interrupted') resolve('interrupted')
-          else reject(new Error(params.turn.error?.message || 'Codex 未能完成任务'))
+          else reject(new Error(params.turn.error?.message || '桃桃 AI 未能完成任务'))
         }
       }
       client.events.on('notification', message)
@@ -215,7 +215,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
       }
       timer = setTimeout(() => {
         if (job.turnId) void client.request('turn/interrupt', { threadId: job.threadId, turnId: job.turnId }).catch(() => {})
-        reject(new Error('等待 Codex 完成的时间已超过 30 分钟'))
+        reject(new Error('桃桃 AI 的处理时间已超过 30 分钟'))
       }, 30 * 60 * 1000)
     })
     try {
@@ -285,7 +285,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
   }
 
   function requireRemote(paired) {
-    if (paired && !config.enabled) throw new Error('主机尚未启用远程会话')
+    if (paired && !config.enabled) throw new Error('请在电脑的「设置 → 桃桃 AI」开启「允许已配对设备使用桃桃 AI」。')
   }
 
   function canRead(id, paired) {
@@ -345,7 +345,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     const client = await workClient()
     const present = threads => threads.some(thread => thread.id === id)
     if (!present(await allThreads(client)) && !present(await allThreads(client, true))) {
-      throw new Error('当前主机账号不能访问这条 Codex 会话')
+      throw new Error('电脑上登录的账号无法访问这条会话')
     }
     const { thread } = await client.request('thread/read', { threadId: id, includeTurns: false })
     return { client, thread }
@@ -400,9 +400,9 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     requireRemote(paired)
     const prompt = String(request?.prompt ?? '').trim()
     if (!prompt || prompt.length > 12000) throw new Error('请输入 1 至 12000 字的任务')
-    if (activeRemote) throw new Error('主机已有一项 Codex 任务正在运行')
+    if (activeRemote) throw new Error('电脑上已有一项桃桃 AI 任务正在运行')
     if (request.id && !canRead(request.id, paired)) throw new Error('这条会话尚未在主机共享')
-    const job = newJob('work', '主机 Codex')
+    const job = newJob('work', '桃桃 AI')
     job.prompt = prompt
     job.paired = paired
     activeRemote = job

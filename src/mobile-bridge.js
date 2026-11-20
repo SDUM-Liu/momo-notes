@@ -4,7 +4,7 @@ import { InAppBrowser, DefaultWebViewOptions, ToolbarPosition } from '@capacitor
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
 import { defaultSettings, defaultCategory, builtInCategories, datesFor, hasContent, newCategory, newDayNote, noteKey, nodeText, localDay } from '../shared/notes.mjs'
 import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
-import { webUrl } from '../shared/links.mjs'
+import { codexSetupUrl, webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
 import { mobileUpdates } from './mobile-updates.js'
@@ -363,7 +363,11 @@ export function createMobileBridge() {
       return modelAnswer(result.data)
     },
     async openProject(target) {
-      const url = { repo: 'https://github.com/SDUM-Liu/momo-notes', issues: 'https://github.com/SDUM-Liu/momo-notes/issues' }[target]
+      const url = {
+        repo: 'https://github.com/SDUM-Liu/momo-notes',
+        issues: 'https://github.com/SDUM-Liu/momo-notes/issues',
+        codexSetup: codexSetupUrl,
+      }[target]
       if (typeof url !== 'string') return
       if (native) await InAppBrowser.openInExternalBrowser({ url })
       else window.open(url, '_blank', 'noopener,noreferrer')

@@ -9,6 +9,7 @@ const { createInstallerDownloads } = require('./installers.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort } = require('../shared/ai.mjs')
+const { codexSetupUrl } = require('../shared/links.mjs')
 const { defaultCategory, noteKey, newCategory, datesFor, newDayNote } = require('../shared/notes.mjs')
 const { createSync } = require('./sync.cjs')
 const { createCodex } = require('./codex.cjs')
@@ -79,7 +80,7 @@ function codexAction(op, data, paired = false) {
   if (op === 'list') return codex.list(data, paired)
   if (op === 'read') return codex.read(data, paired)
   if (op === 'send') return codex.send(data, paired)
-  throw new Error('未知的 Codex 请求')
+  throw new Error('未知的桃桃 AI 请求')
 }
 
 async function approveCodex(method, request) {
@@ -91,8 +92,8 @@ async function approveCodex(method, request) {
   if (win.isDestroyed()) return 'decline'
   win.show()
   const result = await dialog.showMessageBox(win, {
-    type: 'question', title: '桃桃便签 · 主机 Codex 授权', buttons: ['拒绝', '仅允许这一次'],
-    defaultId: 0, cancelId: 0, message: 'Codex 正在请求一项额外权限', detail: detail.slice(0, 6000),
+    type: 'question', title: '桃桃 AI · 权限申请', buttons: ['拒绝', '仅允许这一次'],
+    defaultId: 0, cancelId: 0, message: '桃桃 AI 正在请求额外权限', detail: detail.slice(0, 6000),
   })
   return result.response === 1 ? 'accept' : 'decline'
 }
@@ -140,7 +141,7 @@ function registerIPC() {
       return codex.settings()
     }
     const result = await dialog.showOpenDialog(win, {
-      title: '选择 Codex 工作目录', properties: ['openDirectory'], defaultPath: codex.settings().folder,
+      title: '选择桃桃 AI 的工作目录', properties: ['openDirectory'], defaultPath: codex.settings().folder,
     })
     return result.canceled ? codex.settings() : codex.configure({ folder: result.filePaths[0] })
   })
@@ -148,6 +149,7 @@ function registerIPC() {
     const url = {
       repo: 'https://github.com/SDUM-Liu/momo-notes',
       issues: 'https://github.com/SDUM-Liu/momo-notes/issues',
+      codexSetup: codexSetupUrl,
     }[target]
     if (typeof url === 'string') return shell.openExternal(url)
   })

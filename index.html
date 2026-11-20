@@ -18,7 +18,7 @@
       <nav aria-label="便签工具">
         <button id="history" data-icon="calendar" title="历史便签" aria-label="历史便签"></button>
         <button id="browser" data-icon="globe" title="内置浏览器" aria-label="内置浏览器"></button>
-        <button id="question" data-icon="sparkles" title="问便签 AI" aria-label="问便签 AI"></button>
+        <button id="question" data-icon="sparkles" title="桃桃 AI" aria-label="桃桃 AI"></button>
         <button id="settings" data-icon="settings" title="设置" aria-label="设置"></button>
       </nav>
     </header>
@@ -90,7 +90,7 @@
       <form id="settings-form">
         <div class="settings-shortcuts">
           <button id="settings-sync" type="button" class="quiet"><span data-icon="refresh-cw"></span>设备同步</button>
-          <button id="settings-codex" type="button" class="quiet"><span data-icon="message-circle"></span>主机 Codex</button>
+          <button id="settings-codex" type="button" class="quiet"><span data-icon="message-circle"></span>桃桃 AI</button>
         </div>
         <div class="settings-group desktop-only">
           <label class="switch-row">窗口置顶<input id="pin" type="checkbox" role="switch"></label>
@@ -121,7 +121,7 @@
         </label>
         <button id="installer-settings" type="button" class="quiet desktop-only">下载其他版本</button>
         <h2>便签问答 API</h2>
-        <p id="mobile-ai-host" hidden>配对后，AI API 由主机调用。</p>
+        <p id="mobile-ai-host" hidden>配对后，由电脑处理桃桃 AI 的请求。</p>
         <fieldset id="api-settings" class="settings-group fields">
           <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>
           <label>模型<input id="model" placeholder="服务方提供的模型 ID" maxlength="150"></label>
@@ -191,10 +191,11 @@
         <button id="codex-drawer-toggle" type="button" class="quiet" data-icon="panel-left" aria-label="历史会话" aria-controls="codex-drawer" aria-expanded="false"></button>
         <h1 id="chat-title">桃桃 AI</h1>
         <button id="codex-new" type="button" class="quiet" data-icon="square-pen" aria-label="新会话"></button>
+        <button id="ai-setup" type="button" class="quiet" aria-haspopup="dialog">配置教程</button>
         <button id="ai-back" type="button" class="quiet">返回</button>
       </header>
       <div class="chat-modes" aria-label="回答方式">
-        <button id="ai-mode-codex" type="button" aria-pressed="true">Codex</button>
+        <button id="ai-mode-codex" type="button" aria-pressed="true">对话</button>
         <button id="ai-mode-notes" type="button" aria-pressed="false">便签问答</button>
       </div>
       <div id="chat-model-bar" class="chat-models">
@@ -211,26 +212,27 @@
         <form id="codex-search-form">
           <input id="codex-search" type="search" aria-label="查找会话" maxlength="100" placeholder="搜索标题或项目">
         </form>
-        <select id="codex-thread" aria-label="主机 Codex 会话" hidden><option value="">新会话</option></select>
+        <select id="codex-thread" aria-label="桃桃 AI 会话" hidden><option value="">新会话</option></select>
         <p id="codex-list-status" class="chat-status" role="status"></p>
         <div id="codex-thread-list"></div>
         <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
         <details id="codex-host-config" class="desktop-only">
-          <summary>主机设置</summary>
+          <summary>电脑端设置</summary>
+          <button id="ai-setup-from-settings" class="quiet" type="button" aria-haspopup="dialog">配置教程</button>
           <p id="codex-folder-label"></p>
           <div class="project-links">
             <button id="codex-folder-open" class="quiet" type="button">打开工作目录</button>
             <button id="codex-folder" class="quiet" type="button">更换目录</button>
             <button id="codex-folder-reset" class="quiet" type="button" hidden>恢复默认目录</button>
           </div>
-          <label class="switch-row">允许已配对设备使用会话<input id="codex-remote" type="checkbox"></label>
+          <label class="switch-row">允许已配对设备使用桃桃 AI<input id="codex-remote" type="checkbox"></label>
           <label class="switch-row">向已配对设备共享当前账号的所有会话<input id="codex-all" type="checkbox"></label>
           <label class="switch-row">允许在所选目录内写入<input id="codex-write" type="checkbox"></label>
         </details>
       </aside>
       <div id="codex-pane" class="chat-pane">
         <div id="codex-messages" class="chat-scroll">
-          <p id="codex-empty">给主机 Codex 发一条消息，或从历史中继续会话。</p>
+          <p id="codex-empty">发一条消息，或从历史中继续会话。</p>
           <h2 id="codex-conversation-title"></h2>
           <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享会话</button>
           <button id="codex-older" type="button" class="quiet" hidden>加载更早消息</button>
@@ -243,7 +245,7 @@
         </div>
         <p id="codex-status" class="chat-status" role="status"></p>
         <form id="codex-form" class="chat-composer">
-          <textarea id="codex-prompt" rows="2" required maxlength="12000" aria-label="消息" placeholder="给主机 Codex 发消息"></textarea>
+          <textarea id="codex-prompt" rows="2" required maxlength="12000" aria-label="消息" placeholder="给桃桃 AI 发消息"></textarea>
           <button id="codex-send" type="submit" class="chat-send" data-icon="arrow-up" aria-label="发送"></button>
           <button id="codex-stop" type="button" class="chat-send" data-icon="square" aria-label="停止" hidden></button>
         </form>
@@ -258,7 +260,7 @@
             <div class="ai-scope">
               <label>日期<select id="scope"><option value="auto">按问题识别</option><option value="current">当前日期</option><option value="history">全部日期</option></select></label>
               <label>分类<select id="category-scope"><option value="auto">按问题识别</option><option value="current">当前分类</option><option value="all">全部分类</option></select></label>
-              <label>回答方式<select id="ai-provider"><option value="codex">主机 Codex</option><option value="api">已配置的 API</option></select></label>
+              <label>回答方式<select id="ai-provider"><option value="codex">桃桃 AI</option><option value="api">已配置的 API</option></select></label>
             </div>
           </details>
           <div class="chat-composer">
@@ -268,6 +270,29 @@
           </div>
         </form>
       </div>
+      <dialog id="ai-setup-dialog" aria-labelledby="ai-setup-title">
+        <form class="ai-setup-head" method="dialog">
+          <h2 id="ai-setup-title">配置桃桃 AI</h2>
+          <button type="submit" class="quiet" autofocus>关闭</button>
+        </form>
+        <p>桃桃 AI 通过电脑上的 OpenAI Codex CLI 处理对话和便签问答，使用登录账号的 Codex 用量。</p>
+        <ol>
+          <li>
+            <strong>在电脑上安装或更新 Codex CLI</strong>
+            <p>按官方指南选择 Windows、macOS 或 Linux 的安装方式。电脑上已有 npm 时，也可以在终端运行 <code>npm install -g @openai/codex</code>。</p>
+            <button id="ai-setup-docs" class="quiet" type="button">打开 OpenAI 官方安装指南</button>
+            <small id="ai-setup-status" role="status"></small>
+          </li>
+          <li>
+            <strong>登录并打开桃桃 AI</strong>
+            <p>在电脑终端运行 <code>codex login</code>，用 ChatGPT 账号登录。然后重开桃桃便签，进入「设置 → 桃桃 AI」即可开始对话。</p>
+          </li>
+          <li>
+            <strong>在手机上继续使用</strong>
+            <p>先在「设备同步」配对手机。再在电脑的「设置 → 桃桃 AI」开启「允许已配对设备使用桃桃 AI」。要查看既有会话，可逐条共享，或开启「向已配对设备共享当前账号的所有会话」。手机端打开历史会话后点「刷新」，使用时请保持电脑和桃桃便签在线。</p>
+          </li>
+        </ol>
+      </dialog>
     </section>
   </main>
   <script type="module" src="/src/app.js"></script>

@@ -25,7 +25,7 @@ function codexExecutable() {
       try { fs.accessSync(executable, fs.constants.X_OK); return executable } catch {}
     }
   }
-  throw new Error('主机找不到 Codex CLI，请安装并登录后重试')
+  throw new Error('电脑上找不到 Codex CLI。请打开「桃桃 AI → 配置教程」，按步骤安装并登录。')
 }
 
 function appServer({ cwd, noteMode = false, onRequest = async () => undefined, launch = spawn }) {
@@ -44,7 +44,7 @@ function appServer({ cwd, noteMode = false, onRequest = async () => undefined, l
   const events = new EventEmitter()
   const pending = new Map()
   let nextId = 0, closed = false
-  const errorMessage = '主机的 Codex 服务已结束，请检查 CLI 安装和登录状态'
+  const errorMessage = '桃桃 AI 与电脑上的服务断开了。请按配置教程检查安装和登录状态。'
   function write(value) {
     if (!closed) child.stdin.write(JSON.stringify(value) + '\n')
   }
@@ -54,7 +54,7 @@ function appServer({ cwd, noteMode = false, onRequest = async () => undefined, l
       const id = ++nextId
       const timer = setTimeout(() => {
         pending.delete(id)
-        reject(new Error('Codex 请求超时：' + method))
+        reject(new Error('桃桃 AI 请求超时，请重试'))
       }, timeout)
       pending.set(id, { resolve, reject, timer })
       write({ id, method, params })

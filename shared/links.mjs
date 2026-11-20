@@ -1,3 +1,5 @@
+export const codexSetupUrl = 'https://learn.chatgpt.com/docs/codex/cli'
+
 export function webUrl(value) {
   try {
     const url = new URL(String(value).trim())

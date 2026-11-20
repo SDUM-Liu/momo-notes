@@ -107,7 +107,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
       const row = document.createElement('div')
       row.className = 'chat-message' + (message.role === '你' ? ' from-user' : '')
       const role = document.createElement('strong')
-      role.textContent = message.role
+      role.textContent = message.role === 'Codex' ? '桃桃 AI' : message.role
       row.append(role, document.createTextNode(message.text))
       return row
     }))
@@ -198,7 +198,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     listCursor = result.cursor
     $('codex-more').hidden = listCursor == null
     status.textContent = result.sharing === 'none'
-      ? '主机还没有共享会话。请在电脑的「设置 → 主机 Codex」开启「向已配对设备共享当前账号的所有会话」，或单独共享一条会话。'
+      ? '主机还没有共享会话。请在电脑的「设置 → 桃桃 AI」开启「向已配对设备共享当前账号的所有会话」，或单独共享一条会话。'
       : threads.length ? (result.sharing === 'selected' ? '仅显示主机单独共享的会话。' : '')
         : search ? '没有找到匹配的会话。' : '目前没有可查看的会话。'
     select.replaceChildren(new Option('新会话', ''), ...threads.map(item => {
@@ -258,9 +258,9 @@ export function wireCodex(api, errorMessage, routeToNotes) {
   }
 
   function open(showSettings = false) {
-    if (showSettings) {
+    if (showSettings && !api.mobile) {
       drawer(true)
-      if (!api.mobile) $('codex-host-config').open = true
+      $('codex-host-config').open = true
     }
     void action(async () => {
       await Promise.all([refresh(), !api.mobile && api.codexSettings().then(drawConfig)])
@@ -334,7 +334,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     $('codex-log').hidden = !job.log
     $('codex-stop').hidden = job.status !== 'running' || !job.turnId
     $('codex-status').textContent = job.status === 'running'
-      ? job.retrying ? '主机正在重新连接 Codex…' : '主机正在处理。若需要额外权限，请在主机确认。'
+      ? job.retrying ? '电脑正在重试请求…' : '电脑正在处理。若需要额外权限，请在电脑上确认。'
       : job.status === 'interrupted' ? '已停止' : job.status === 'failed' ? job.error : '已完成'
     bottom()
   }

@@ -58,6 +58,7 @@ function noteStatus(message, error = false) {
 }
 
 function showView(next) {
+  if (next !== 'ai' && $('ai-setup-dialog').open) $('ai-setup-dialog').close()
   if (view === 'browser' && next !== 'browser') void api.hideBrowser()
   if (view === 'sync' && next !== 'sync') {
     ++qrRequest
@@ -874,6 +875,20 @@ function openChat(back) {
 $('question').onclick = () => view === 'ai' ? showView('note') : openChat('note')
 $('settings-codex').onclick = () => openChat('settings')
 $('ai-back').onclick = () => showView(chatBack)
+for (const id of ['ai-setup', 'ai-setup-from-settings']) {
+  $(id).onclick = () => {
+    $('ai-setup-status').textContent = ''
+    $('ai-setup-dialog').showModal()
+  }
+}
+$('ai-setup-docs').onclick = async () => {
+  try {
+    $('ai-setup-status').textContent = ''
+    await api.openProject('codexSetup')
+  } catch (error) {
+    $('ai-setup-status').textContent = errorMessage(error)
+  }
+}
 $('ai-mode-codex').onclick = () => chatMode(false)
 $('ai-mode-notes').onclick = $('ai-provider').onchange = () => chatMode(true)
 const questionRequest = () => ({
@@ -930,7 +945,7 @@ $('ai-form').onsubmit = async event => {
       const completed = await followCodex(api, started, job => {
         noteJob = job
         $('ai-cancel').hidden = !job.turnId || job.status !== 'running'
-        const detail = job.retrying && job.status === 'running' ? '主机正在重新连接 Codex…' : ''
+        const detail = job.retrying && job.status === 'running' ? '电脑正在重试请求…' : ''
         answer.textContent = job.label + '\n\n' + ([job.output, detail].filter(Boolean).join('\n\n') || '正在主机上读取便签并回答…')
       }, () => profile === profileRevision)
       if (!completed || profile !== profileRevision) return
