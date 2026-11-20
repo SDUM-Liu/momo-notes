@@ -157,6 +157,10 @@
     <section id="sync-view" class="view sub-view" hidden>
       <div class="subhead"><h1>设备同步</h1><button id="sync-back" class="quiet">返回设置</button></div>
       <div class="sync-body">
+        <div id="sync-role-choice" class="sync-role desktop-only" hidden aria-label="这台电脑的同步角色">
+          <button id="sync-role-host" type="button" class="quiet" aria-pressed="true">主设备</button>
+          <button id="sync-role-follower" type="button" class="quiet" aria-pressed="false">从设备</button>
+        </div>
         <p id="sync-status" role="status"></p>
         <div id="sync-host">
           <details id="sync-relay-settings">
@@ -175,7 +179,7 @@
         <form id="sync-mobile" hidden>
           <label>主机配对码<input id="sync-pair-code" placeholder="粘贴配对码或识别二维码" autocomplete="off" maxlength="768" required></label>
           <button id="sync-camera" type="button" class="quiet" hidden>相机扫码</button>
-          <label class="quiet qr-picker">从相册识别<input id="sync-photo" type="file" accept="image/*"></label>
+          <label class="quiet qr-picker"><span id="sync-photo-label">从相册识别</span><input id="sync-photo" type="file" accept="image/*"></label>
           <button id="sync-test" class="quiet" type="button">测试连接</button>
           <button id="sync-pair" class="primary" type="submit">配对并同步</button>
           <p id="sync-test-status" role="status"></p>

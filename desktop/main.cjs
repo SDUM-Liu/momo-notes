@@ -10,8 +10,10 @@ const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort } = require('../shared/ai.mjs')
 const { codexSetupUrl } = require('../shared/links.mjs')
-const { defaultCategory, noteKey, newCategory, datesFor, newDayNote } = require('../shared/notes.mjs')
+const { defaultCategory, noteKey, newCategory, datesFor, newDayNote, emptyNote, localDay } = require('../shared/notes.mjs')
+const { parsePairing } = require('../shared/sync.mjs')
 const { createSync } = require('./sync.cjs')
+const { createFollower } = require('./follower.cjs')
 const { createCodex } = require('./codex.cjs')
 const { appServer } = require('./codex-rpc.cjs')
 
@@ -20,18 +22,20 @@ if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-
 if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('ozone-platform', 'x11')
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
-let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, browser, sync, codex
+let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, browser, sync, follower, codex
 let mode = 'pet'
 let quitting = false
 let asking = false
 
 const currentArea = point => screen.getDisplayNearestPoint(point).workArea
+const notesStore = () => follower?.store || store
+const notesLocked = () => Boolean(follower?.store || sync.state().locked)
 const publicSettings = () => {
   const { key, ...settings } = store.data.settings
   return { ...settings, openAtLogin: opensAtLogin(), hasKey: Boolean(key) }
 }
 const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state,
-  browser: browser.state, categories: store.data.categories, locked: sync.state().locked })
+  browser: browser.state, categories: notesStore().data.categories, locked: notesLocked() })
 
 function syncState() {
   win.webContents.send('app:state-changed', state())
@@ -54,7 +58,7 @@ function toggle() {
 
 function refreshDay() {
   if (sync?.state().locked) return
-  const next = store.today()
+  const next = follower.store ? localDay() : store.today()
   if (next === today) return
   today = next
   win.webContents.send('notes:day-changed', next)
@@ -64,7 +68,8 @@ async function ask(request) {
   if (asking) throw new Error('上一条提问仍在处理')
   asking = true
   try {
-    return await answer(store.data, request)
+    const visible = notesStore().data
+    return await answer({ ...visible, settings: store.data.settings }, request)
   } finally {
     asking = false
   }
@@ -137,12 +142,27 @@ function registerIPC() {
   handle('browser:hide', browser.hide)
   handle('browser:back', browser.back)
   handle('sync:state', sync.state)
-  handle('sync:enable', sync.setEnabled)
+  handle('sync:enable', (enabled, ...args) => {
+    if (enabled && follower.store) throw new Error('请先取消从设备配对，再开启主设备同步')
+    return sync.setEnabled(enabled, ...args)
+  })
   handle('sync:code', sync.code)
   handle('sync:rotate', sync.rotate)
   handle('sync:link', sync.link)
   handle('sync:status', sync.status)
   handle('sync:exchange', sync.exchange)
+  handle('follower:code', () => follower.code)
+  handle('follower:set', value => {
+    if (value) {
+      if (sync.state().enabled) throw new Error('请先停止本机的主设备同步')
+      if (sync.owns(parsePairing(value).key)) throw new Error('不能配对本机的主设备配对码')
+    }
+    follower.setPair(value)
+  })
+  handle('follower:snapshot', follower.snapshot)
+  handle('follower:categories', follower.categories)
+  handle('follower:accept', follower.accept)
+  handle('follower:reconcile', follower.reconcile)
   handle('codex:action', (op, data) => codexAction(op, data))
   handle('codex:settings', codex.settings)
   handle('codex:configure', values => codex.configure({ enabled: values.enabled, write: values.write, shareAll: values.shareAll }))
@@ -209,22 +229,25 @@ function registerIPC() {
   })
   handle('notes:dates', (category = defaultCategory) => {
     refreshDay()
-    if (sync.state().locked) return datesFor(store.data.notes, category, today)
+    if (notesLocked()) return datesFor(notesStore().data.notes, category, today)
     return store.dates(category)
   })
   handle('notes:category', name => {
+    if (follower.store) throw new Error('从设备只读，请在主设备新建分类')
     sync.requireWritable()
     return store.addCategory(newCategory(name))
   })
   handle('notes:open', (date, category = defaultCategory) => {
     refreshDay()
-    const day = date || (sync.state().locked ? today : store.today(category))
+    const day = date || (notesLocked() ? today : store.today(category))
     const key = noteKey(category, day)
-    const doc = store.data.notes[key] || (!date && sync.state().locked ? newDayNote(store.data.notes, category, day) : null)
+    const data = notesStore().data
+    const doc = data.notes[key] || (!date && notesLocked() ? (follower.store ? emptyNote() : newDayNote(data.notes, category, day)) : null)
     if (!doc) throw new Error('日期页不存在')
-    return { date: day, category, doc, today, rev: store.data.revisions[key] }
+    return { date: day, category, doc, today, rev: data.revisions[key] }
   })
   handle('notes:save', (date, doc, category = defaultCategory, base) => {
+    if (follower.store) throw new Error('从设备只读，请在主设备编辑便签')
     sync.requireWritable()
     const key = noteKey(category, date)
     return base === undefined
@@ -277,7 +300,7 @@ function registerIPC() {
 function start() {
   store = openStore(app.getPath('userData'))
   app.dock?.hide()
-  today = store.today()
+  today = localDay()
   const area = screen.getPrimaryDisplay().workArea
   const previous = store.data.position
   anchor = previous?.anchor ?? { x: area.x + area.width - 88, y: area.y + Math.round(area.height * 0.66) }
@@ -313,7 +336,20 @@ function start() {
   browser = createBrowser(win, value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
   })
-  codex = createCodex(app.getPath('userData'), store, approveCodex, launchHostCodex)
+  follower = createFollower(app.getPath('userData'), {
+    seal(code) {
+      const basic = process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
+      return safeStorage.isEncryptionAvailable() && !basic ? safeStorage.encryptString(code).toString('base64') : ''
+    },
+    open: sealed => safeStorage.decryptString(Buffer.from(sealed, 'base64')),
+  }, change => {
+    if (quitting || win.isDestroyed()) return
+    if (change.profileChanged) today = follower.store ? localDay() : store.today()
+    win.webContents.send('notes:changed', { ...change,
+      ...(change.profileChanged && { categories: notesStore().data.categories, locked: notesLocked() }) })
+  })
+  if (!follower.store) today = store.today()
+  codex = createCodex(app.getPath('userData'), { get data() { return notesStore().data } }, approveCodex, launchHostCodex)
   sync = createSync(app.getPath('userData'), store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
   }, (op, payload) => codexAction(op, payload, true))

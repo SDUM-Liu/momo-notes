@@ -175,6 +175,7 @@ function createSync(directory, store, ask, notify, codex) {
 
   return {
     state,
+    owns(key) { return config.key === key },
     requireWritable,
     write(payload) {
       requireWritable()

@@ -1,10 +1,12 @@
 import { parsePairing, seal, unseal, wireLimit } from '../shared/sync.mjs'
 
-export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change }) {
+export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change,
+  readOnly = false, reconcile = () => {} }) {
   let pair, running, probing, switching, verified = false, peerLocked = true, last = '', error = ''
   let via
-  const state = () => ({ role: 'mobile', enabled: Boolean(pair), via, last, error,
-    locked: !pair || !verified || Boolean(running || switching || peerLocked) })
+  const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), via, last, error,
+    ...(readOnly && { syncing: Boolean(running || switching || (pair && !verified && !error)) }),
+    locked: readOnly || !pair || !verified || Boolean(running || switching || peerLocked) })
   async function request(connection, op, payload, token) {
     const bytes = crypto.getRandomValues(new Uint8Array(12))
     const id = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
@@ -59,11 +61,12 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         peerLocked = snapshot.locked
         if (peerLocked) { verified = false; return }
         const known = new Set(snapshot.categories.map(item => item.id))
-        const extra = categories().filter(item => !known.has(item.id))
-        const dirty = Object.values(records).some(record => record.dirty)
+        const extra = readOnly ? [] : categories().filter(item => !known.has(item.id))
+        const dirty = !readOnly && Object.values(records).some(record => record.dirty)
         const outdated = Object.entries(snapshot.revisions).some(([key, rev]) => records[key]?.rev !== rev)
         await setCategories(snapshot.categories)
         if (!extra.length && !dirty && !outdated) {
+          if (readOnly) await reconcile(snapshot.revisions)
           verified = true
           last = new Date().toISOString()
           error = ''
@@ -73,7 +76,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         token = response.token
         await setCategories(response.categories)
         for (const [key, record] of Object.entries(records)) {
-          if (!record.dirty) continue
+          if (readOnly || !record.dirty) continue
           try {
             const updated = await request(connection, 'put', { key, doc: record.doc, base: record.rev }, token)
             await accept(key, record, updated, true)
@@ -84,7 +87,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
             await accept(key, record, updated, false)
           }
         }
-        const remote = await request(connection, 'materialize', undefined, token)
+        const remote = readOnly ? response.revisions : await request(connection, 'materialize', undefined, token)
         // Pull recent pages first so today's view refreshes quickly.
         for (const [key, rev] of Object.entries(remote).sort(([a], [b]) => b.slice(-10).localeCompare(a.slice(-10)))) {
           const current = records[key]
@@ -94,6 +97,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         }
         await request(connection, 'finish', undefined, token)
         token = undefined
+        if (readOnly) await reconcile(remote)
         verified = true
         last = new Date().toISOString()
         error = ''
@@ -162,6 +166,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         await saveCode(String(code).trim())
         await activate(next)
         pair = next
+        via = undefined
         verified = false
         peerLocked = true
         last = ''

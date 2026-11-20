@@ -10,12 +10,13 @@ import { parsePairing } from '../shared/sync.mjs'
 import { hostSyncLink } from './rtc-sync.js'
 import { followCodex, wireCodex } from './codex-view.js'
 import { wireInstallerDownloads } from './installers-view.js'
+import { desktopFollower } from './desktop-follower.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
 import './style.css'
 
-const api = window.momo ?? (await import('./mobile-bridge.js')).createMobileBridge()
+const api = window.momo ? desktopFollower(window.momo) : (await import('./mobile-bridge.js')).createMobileBridge()
 if (api.mobile) {
   document.body.dataset.platform = 'mobile'
   document.body.dataset.mobileOs = api.platform
@@ -639,7 +640,7 @@ if (api.floatingPet) {
   })
 }
 
-let syncState, qrRequest = 0, stopHostLink, hostLinkRevision = 0
+let syncState, qrRequest = 0, stopHostLink, hostLinkRevision = 0, followerView = false
 const syncPathLabel = via => via === 'direct' ? '点对点直连' : via === 'relay' ? '加密中继' : ''
 
 async function connectHostLink() {
@@ -665,8 +666,18 @@ async function connectHostLink() {
 function drawSync(value) {
   syncState = value
   const mobile = value.role === 'mobile'
-  $('sync-host').hidden = mobile
-  $('sync-mobile').hidden = !mobile
+  const follower = value.role === 'follower' && value.enabled
+  if (follower) followerView = true
+  const follow = !mobile && followerView
+  $('sync-role-choice').hidden = !api.supportsFollower
+  $('sync-role-host').setAttribute('aria-pressed', String(!follow))
+  $('sync-role-host').disabled = follower
+  $('sync-role-follower').setAttribute('aria-pressed', String(follow))
+  $('sync-role-follower').disabled = value.role === 'host' && value.enabled
+  $('sync-host').hidden = mobile || follow
+  $('sync-mobile').hidden = !mobile && !follow
+  $('sync-drafts').hidden = !mobile
+  if (!mobile) $('sync-photo-label').textContent = '从二维码图片识别'
   $('api-settings').hidden = mobile && value.enabled
   $('mobile-ai-host').hidden = !mobile || !value.enabled
   if (mobile) {
@@ -677,6 +688,16 @@ function drawSync(value) {
     $('sync-status').textContent = value.error || (value.locked ? '设备同步中，便签只读' : value.enabled
       ? [syncPathLabel(value.via) || '已配对', value.last ? new Date(value.last).toLocaleTimeString() : '等待首次同步'].join(' · ')
       : '从桌面主机获取配对码或二维码。')
+    return
+  }
+  $('note-locked').textContent = follower ? '从设备 · 请在主设备编辑便签' : '正在同步，便签暂时只读。'
+  if (follow) {
+    $('sync-pair').hidden = follower
+    $('sync-now').hidden = $('sync-unpair').hidden = !follower
+    $('sync-status').textContent = value.error || (follower
+      ? value.syncing ? '正在接收主设备便签…' : ['从设备 · 只读', syncPathLabel(value.via),
+          value.last ? new Date(value.last).toLocaleTimeString() : ''].filter(Boolean).join(' · ')
+      : '配对另一台电脑，只读同步它的便签。本机便签和设置单独保留。')
     return
   }
   $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
@@ -697,7 +718,7 @@ async function showPairing() {
   $('sync-qr').hidden = true
   $('sync-qr').removeAttribute('src')
   $('sync-code').value = ''
-  if (view !== 'sync' || syncState?.status !== 'online' || !syncState.enabled) return
+  if (view !== 'sync' || followerView || syncState?.status !== 'online' || !syncState.enabled) return
   const code = await api.syncCode()
   if (view !== 'sync' || request !== qrRequest) return
   $('sync-code').value = code
@@ -731,6 +752,13 @@ $('settings-sync').onclick = () => {
   })
 }
 $('sync-back').onclick = () => showView('settings')
+for (const [id, follow] of [['sync-role-host', false], ['sync-role-follower', true]]) {
+  $(id).onclick = () => {
+    followerView = follow
+    $('sync-pair-code').value = $('sync-test-status').textContent = ''
+    void syncAction(() => api.syncState())
+  }
+}
 $('sync-enable').onclick = () => syncAction(async () => {
   await api.enableSync(!syncState.enabled, $('sync-relay').value, $('sync-fallback').value)
   await connectHostLink()
@@ -757,7 +785,11 @@ $('sync-test').onclick = async event => {
     button.disabled = false
   }
 }
-$('sync-unpair').onclick = () => syncAction(() => api.unpairSync(), $('sync-unpair'))
+$('sync-unpair').onclick = () => syncAction(async () => {
+  const result = await api.unpairSync()
+  if (api.supportsFollower) followerView = false
+  return result
+}, $('sync-unpair'))
 $('sync-drafts').onclick = async () => {
   const drafts = await api.syncDrafts()
   $('sync-draft-text').value = Object.entries(drafts).map(([key, doc]) => key + '\n' + nodeText(doc, true)).join('\n\n') || '没有待整理的草稿'
@@ -766,6 +798,7 @@ $('sync-drafts').onclick = async () => {
 $('sync-mobile').onsubmit = event => {
   event.preventDefault()
   void syncAction(async () => {
+    if (api.supportsFollower) await saveBeforeSwitch()
     const result = await api.pairSync($('sync-pair-code').value)
     $('sync-pair-code').value = ''
     return result
@@ -1040,6 +1073,10 @@ async function init() {
       codexView.reset()
       editor.commands.clearContent(false)
       state.categories = change.categories
+      if (typeof change.locked === 'boolean') {
+        state.locked = change.locked
+        setReadOnly(change.locked)
+      }
       drawCategories(change.categories)
       void loadNote(undefined, defaultCategory, false)
       return
@@ -1059,6 +1096,11 @@ async function init() {
       return
     }
     if (!currentDate || change.key !== noteKey(category, currentDate)) return
+    if (change.removed) {
+      currentDate = undefined
+      void loadNote(undefined, category, false)
+      return
+    }
     const generation = editGeneration
     const request = pageRequest
     if (editor.view.composing) return
