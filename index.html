@@ -212,6 +212,7 @@
           <input id="codex-search" type="search" aria-label="查找会话" maxlength="100" placeholder="搜索标题或项目">
         </form>
         <select id="codex-thread" aria-label="主机 Codex 会话" hidden><option value="">新会话</option></select>
+        <p id="codex-list-status" class="chat-status" role="status"></p>
         <div id="codex-thread-list"></div>
         <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
         <details id="codex-host-config" class="desktop-only">
@@ -233,6 +234,8 @@
           <h2 id="codex-conversation-title"></h2>
           <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享会话</button>
           <button id="codex-older" type="button" class="quiet" hidden>加载更早消息</button>
+          <p id="codex-history-status" class="chat-status" role="status"></p>
+          <button id="codex-history-retry" type="button" class="quiet" hidden>重试加载</button>
           <div id="codex-history" aria-label="会话消息"></div>
           <div id="codex-pending" class="chat-message from-user" hidden></div>
           <div id="codex-output" class="chat-message" hidden></div>

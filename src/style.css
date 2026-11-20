@@ -277,6 +277,7 @@ time { font-size: 11px; color: var(--muted); }
 .chat-drawer-title { display: flex; align-items: center; gap: 3px; margin-bottom: 5px; }
 .chat-drawer-title strong { flex: 1; }
 #codex-search { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 7px; background: white; }
+#codex-list-status, #codex-history-status { margin: 6px 0; }
 #codex-thread-list { display: grid; gap: 4px; margin-top: 7px; }
 #codex-thread-list button { text-align: left; border: 0; border-radius: 8px; background: transparent; padding: 8px; }
 #codex-thread-list button[aria-pressed="true"], #codex-thread-list button:hover { background: #f7e3eb; }

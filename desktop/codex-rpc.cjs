@@ -76,7 +76,7 @@ function appServer({ cwd, noteMode = false, onRequest = async () => undefined, l
       if (!call) return
       clearTimeout(call.timer)
       pending.delete(message.id)
-      if (message.error) call.reject(new Error(message.error.message))
+      if (message.error) call.reject(Object.assign(new Error(message.error.message), { code: message.error.code }))
       else call.resolve(message.result)
     }
   })

@@ -75,6 +75,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
   let request = 0
   let scope = 0
   let listRequest = 0
+  let retryOlder = false
   const scroll = $('codex-messages')
   const promptBox = $('codex-prompt')
   const bottom = () => { scroll.scrollTop = scroll.scrollHeight }
@@ -98,7 +99,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     $('codex-remote').checked = value.enabled
     $('codex-all').checked = value.shareAll
     $('codex-write').checked = value.write
-    if (value.shareAll) $('codex-share').hidden = true
+    $('codex-share').hidden = !threads.some(item => item.id === select.value) || value.shareAll
   }
 
   function renderHistory() {
@@ -130,6 +131,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
       button.onclick = () => {
         select.value = item.id
         drawer(false)
+        $('codex-status').textContent = ''
         void action(() => read())
       }
       return button
@@ -147,25 +149,58 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     const previousHeight = scroll.scrollHeight
     if (!older) { clearOutput(); cursor = undefined; history = []; renderHistory(); renderThreads() }
     const selected = threads.find(item => item.id === id)
+    const status = $('codex-history-status')
+    status.textContent = ''
+    $('codex-history-retry').hidden = true
     $('codex-share').hidden = api.mobile || !selected || config?.shareAll
     if (selected) $('codex-share').textContent = selected.shared ? '取消共享' : '共享给已配对设备'
     if (!id) return
-    const result = await api.codex('read', { id, cursor })
-    if (version !== request) return
-    cursor = result.cursor
-    history = [...result.messages, ...history]
-    renderHistory()
-    if (older) scroll.scrollTop += scroll.scrollHeight - previousHeight
-    else bottom()
+    status.textContent = older ? '正在加载更早的消息…' : '正在读取主机上的历史消息…'
+    $('codex-older').disabled = true
+    try {
+      const result = await api.codex('read', { id, cursor })
+      if (version !== request) return
+      cursor = result.cursor
+      history = [...result.messages, ...history]
+      renderHistory()
+      status.textContent = !history.length ? (cursor ? '本页没有聊天消息，可以继续向前查看。' : '这条会话还没有聊天消息。') : ''
+      if (older) scroll.scrollTop += scroll.scrollHeight - previousHeight
+      else bottom()
+    } catch (error) {
+      if (version !== request) return
+      status.textContent = errorMessage(error)
+      retryOlder = older
+      $('codex-history-retry').hidden = false
+    } finally {
+      if (version === request) $('codex-older').disabled = false
+    }
   }
 
   async function load(preferred = select.value, more = false, refresh = false) {
     const before = ++listRequest
-    const result = await api.codex('list', { search: $('codex-search').value, cursor: more ? listCursor : null, refresh })
+    const status = $('codex-list-status')
+    const search = $('codex-search').value.trim()
+    status.textContent = '正在读取主机上的会话…'
+    $('codex-more').disabled = true
+    let result
+    try {
+      result = await api.codex('list', { search, cursor: more ? listCursor : null, refresh })
+    } catch (error) {
+      if (before === listRequest) status.textContent = errorMessage(error)
+      return
+    } finally {
+      if (before === listRequest) $('codex-more').disabled = false
+    }
     if (before !== listRequest) return
-    threads = more ? [...threads, ...result.threads] : result.threads
+    if (result.sharing === 'none') preferred = ''
+    threads = more && result.sharing !== 'none'
+      ? [...new Map([...threads, ...result.threads].map(item => [item.id, item])).values()] : result.threads
     listCursor = result.cursor
-    $('codex-more').hidden = listCursor === null
+    $('codex-more').hidden = listCursor == null
+    status.textContent = result.sharing === 'none'
+      ? '主机还没有共享会话。请在电脑的「设置 → 主机 Codex」开启「向已配对设备共享当前账号的所有会话」，或单独共享一条会话。'
+      : threads.length ? (result.sharing === 'selected' ? '仅显示主机单独共享的会话。' : '')
+        : search ? '没有找到匹配的会话。' : '目前没有可查看的会话。'
     select.replaceChildren(new Option('新会话', ''), ...threads.map(item => {
       const folder = item.cwd?.split(/[\\/]/).filter(Boolean).at(-1)
       const details = [folder, item.archived ? '已归档' : '', item.shared && !api.mobile ? '已共享' : ''].filter(Boolean)
@@ -174,7 +209,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     if (preferred && !threads.some(item => item.id === preferred)) select.add(new Option('当前会话', preferred))
     select.value = preferred
     renderThreads()
-    if (!more) await read()
+    if (!more || result.sharing === 'none') await read()
   }
 
   async function observe(started) {
@@ -282,6 +317,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
   }
   $('codex-search').onchange = () => { if (!watching) void action(() => load(select.value)) }
   $('codex-older').onclick = () => action(() => read(true))
+  $('codex-history-retry').onclick = () => action(() => read(retryOlder))
   select.onchange = () => action(() => read())
   $('codex-stop').onclick = () => action(async () => {
     if (currentJob?.turnId) await api.codex('interrupt', currentJob.id)
@@ -349,6 +385,9 @@ export function wireCodex(api, errorMessage, routeToNotes) {
       $('codex-send').disabled = false
       $('codex-new').disabled = false
       $('codex-stop').hidden = $('codex-output').hidden = $('codex-log').hidden = $('codex-more').hidden = true
+      $('codex-history-retry').hidden = true
+      $('codex-more').disabled = $('codex-older').disabled = false
+      $('codex-list-status').textContent = $('codex-history-status').textContent = ''
       $('codex-search').value = $('codex-prompt').value = ''
       $('codex-status').textContent = $('codex-output').textContent = $('codex-log').querySelector('pre').textContent = ''
       renderHistory()

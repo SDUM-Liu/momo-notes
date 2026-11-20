@@ -6,6 +6,7 @@ const { scopedNotes } = require('../shared/note-query.mjs')
 
 const textInput = text => [{ type: 'text', text, text_elements: [] }]
 const limit = 24000
+const historyPageSize = 12
 const noteSkillName = 'momo-notes-query'
 const notesTool = {
   type: 'function', name: 'read_note_chunk', description: 'Read one numbered chunk of the selected user notes.',
@@ -37,10 +38,41 @@ function formatThread(thread, archived) {
 
 function messageHistory(turns) {
   return turns.slice().reverse().flatMap(turn => turn.items).flatMap(item => {
-    if (item.type === 'agentMessage') return [{ role: 'Codex', text: item.text.slice(0, limit) }]
-    if (item.type === 'userMessage') return [{ role: '你', text: item.content.filter(part => part.type === 'text').map(part => part.text).join('\n').slice(0, limit) }]
+    if (item.type === 'agentMessage' && item.text) return [{ role: 'Codex', text: item.text }]
+    if (item.type === 'userMessage') {
+      const text = item.content.map(part => {
+        if (part.type === 'text') return part.text
+        if (['image', 'localImage'].includes(part.type)) return '［图片］'
+        if (['audio', 'localAudio'].includes(part.type)) return '［音频］'
+        if (['skill', 'mention'].includes(part.type)) return part.name
+        return ''
+      }).filter(Boolean).join('\n')
+      if (text) return [{ role: '你', text }]
+    }
     return []
   })
+}
+
+async function historyPage(client, id, cursor) {
+  const prefix = 'legacy:'
+  if (typeof cursor !== 'string' || !cursor.startsWith(prefix)) {
+    try {
+      const page = await client.request('thread/turns/list', {
+        threadId: id, limit: historyPageSize, cursor: cursor || null, itemsView: 'full', sortDirection: 'desc',
+      })
+      return { messages: messageHistory(page.data), cursor: page.nextCursor ?? null }
+    } catch (error) {
+      if (cursor || (error.code !== -32601 && !/unknown (?:variant|method).*thread\/turns\/list|method not found/i.test(error.message))) throw error
+    }
+  }
+  const { thread } = await client.request('thread/read', { threadId: id, includeTurns: true })
+  const before = cursor ? thread.turns.findIndex(turn => turn.id === cursor.slice(prefix.length)) : thread.turns.length
+  if (before < 0) throw new Error('历史消息已变化，请重新打开会话')
+  const start = Math.max(0, before - historyPageSize)
+  return {
+    messages: messageHistory(thread.turns.slice(start, before).reverse()),
+    cursor: start > 0 ? prefix + thread.turns[start].id : null,
+  }
 }
 
 async function listModels(client) {
@@ -277,6 +309,9 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
         },
       })
       remote = authenticated(client).then(() => client)
+      client.events.on('notification', method => {
+        if (method === 'account/updated') catalog = null
+      })
       client.events.once('closed', () => { remote = null; catalog = null })
       remote.catch(() => { client.close(); remote = null })
     }
@@ -318,10 +353,15 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
 
   async function list(request, paired) {
     requireRemote(paired)
+    if (paired && !config.shareAll && !config.shared?.length) {
+      return { threads: [], cursor: null, sharing: 'none' }
+    }
     const client = await workClient()
     const term = String(request?.search ?? '').trim().toLowerCase().slice(0, 100)
     const offset = Number.isInteger(request?.cursor) ? Math.max(0, request.cursor) : 0
-    const threads = (await allThreads(client, request?.refresh === true))
+    const entries = await allThreads(client, request?.refresh === true)
+    requireRemote(paired)
+    const threads = entries
       .filter(thread => canRead(thread.id, paired))
       .map(thread => ({ ...thread, cwd: paired ? path.basename(thread.cwd || '') : thread.cwd }))
       .filter(thread => !term || (thread.title + '\n' + thread.cwd).toLowerCase().includes(term))
@@ -329,15 +369,18 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
       ...thread,
       shared: Boolean(config.shareAll || config.shared?.includes(thread.id)),
     }))
-    return { threads: items, cursor: offset + items.length < threads.length ? offset + items.length : null }
+    return {
+      threads: items, cursor: offset + items.length < threads.length ? offset + items.length : null,
+      ...(paired && { sharing: config.shareAll ? 'all' : config.shared?.length ? 'selected' : 'none' }),
+    }
   }
 
   async function read(request, paired) {
     const { client } = await threadInScope(request.id, paired)
-    const result = await client.request('thread/turns/list', {
-      threadId: request.id, limit: 16, cursor: request.cursor || null, itemsView: 'full', sortDirection: 'desc',
-    })
-    return { messages: messageHistory(result.data), cursor: result.nextCursor }
+    const result = await historyPage(client, request.id, request.cursor)
+    requireRemote(paired)
+    if (!canRead(request.id, paired)) throw new Error('这条会话尚未在主机共享')
+    return result
   }
 
   async function share(id, enabled) {
