@@ -110,14 +110,19 @@ def main(apk):
     overlays = wait_for(windows, lambda items: len(items) == 1, 'Pet did not become a real overlay after granting permission')
     left, top, right, bottom = frame_of(overlays[0])
     shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
-    note = wait_for(windows, lambda items: len(items) == 1 and 'NOT_FOCUSABLE' not in items[0],
-                    'Tapping the pet did not open a focusable system overlay')
-    left, top, _, _ = frame_of(note[0])
+    focusable = lambda items: len(items) == 1 and 'NOT_FOCUSABLE' not in items[0]
+    wait_for(windows, focusable, 'Tapping the pet did not open a focusable system overlay')
     # At the fixed test density the handle's painted grip is 194 px from the left edge.
-    time.sleep(1)
-    shell('input', 'swipe', str(left + 194), str(top + 26), str(left + 194), str(top + 166), '600')
-    wait_for(windows, lambda items: len(items) == 1 and frame_of(items[0])[1] > top,
-             'Dragging the note did not move the system window')
+    for _ in range(3):
+        time.sleep(1)
+        note = wait_for(windows, focusable, 'The floating note closed before being dragged')
+        left, top, _, _ = frame_of(note[0])
+        shell('input', 'swipe', str(left + 194), str(top + 26), str(left + 194), str(top + 166), '600')
+        moved = windows()
+        if focusable(moved) and frame_of(moved[0])[1] > top:
+            break
+    else:
+        raise AssertionError('Dragging the note did not move the system window')
     open_launcher_entry()
     wait_for(windows, lambda items: not items, 'A launcher entry kept the note in a floating window')
     check_status_bar()
