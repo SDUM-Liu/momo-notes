@@ -209,15 +209,10 @@
           <button id="codex-refresh" type="button" class="quiet">刷新</button>
           <button id="codex-drawer-close" type="button" class="quiet" data-icon="x" aria-label="关闭会话列表"></button>
         </div>
-        <form id="codex-search-form">
-          <input id="codex-search" type="search" aria-label="查找会话" maxlength="100" placeholder="搜索标题或项目">
-        </form>
-        <select id="codex-thread" aria-label="桃桃 AI 会话" hidden><option value="">新会话</option></select>
-        <p id="codex-list-status" class="chat-status" role="status"></p>
-        <div id="codex-thread-list"></div>
-        <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
         <details id="codex-host-config" class="desktop-only">
           <summary>电脑端设置</summary>
+          <label class="switch-row">允许已配对设备使用桃桃 AI<input id="codex-remote" type="checkbox" role="switch"></label>
+          <label class="switch-row">向已配对设备共享当前账号的所有会话<input id="codex-all" type="checkbox" role="switch"></label>
           <button id="ai-setup-from-settings" class="quiet" type="button" aria-haspopup="dialog">配置教程</button>
           <p id="codex-folder-label"></p>
           <div class="project-links">
@@ -225,16 +220,23 @@
             <button id="codex-folder" class="quiet" type="button">更换目录</button>
             <button id="codex-folder-reset" class="quiet" type="button" hidden>恢复默认目录</button>
           </div>
-          <label class="switch-row">允许已配对设备使用桃桃 AI<input id="codex-remote" type="checkbox"></label>
-          <label class="switch-row">向已配对设备共享当前账号的所有会话<input id="codex-all" type="checkbox"></label>
           <label class="switch-row">允许在所选目录内写入<input id="codex-write" type="checkbox"></label>
         </details>
+        <form id="codex-search-form">
+          <input id="codex-search" type="search" aria-label="查找会话" maxlength="100" placeholder="搜索标题或项目">
+        </form>
+        <select id="codex-thread" aria-label="桃桃 AI 会话" hidden><option value="">新会话</option></select>
+        <p id="codex-list-status" class="chat-status" role="status"></p>
+        <div id="codex-thread-list"></div>
+        <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
       </aside>
       <div id="codex-pane" class="chat-pane">
-        <div id="codex-messages" class="chat-scroll">
-          <p id="codex-empty">发一条消息，或从历史中继续会话。</p>
+        <div id="codex-conversation-bar" hidden>
           <h2 id="codex-conversation-title"></h2>
           <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享会话</button>
+        </div>
+        <div id="codex-messages" class="chat-scroll">
+          <p id="codex-empty">发一条消息，或从历史中继续会话。</p>
           <button id="codex-older" type="button" class="quiet" hidden>加载更早消息</button>
           <p id="codex-history-status" class="chat-status" role="status"></p>
           <button id="codex-history-retry" type="button" class="quiet" hidden>重试加载</button>
@@ -289,7 +291,7 @@
           </li>
           <li>
             <strong>在手机上继续使用</strong>
-            <p>先在「设备同步」配对手机。再在电脑的「设置 → 桃桃 AI」开启「允许已配对设备使用桃桃 AI」。要查看既有会话，可逐条共享，或开启「向已配对设备共享当前账号的所有会话」。手机端打开历史会话后点「刷新」，使用时请保持电脑和桃桃便签在线。</p>
+            <p>先在「设备同步」配对手机。再到电脑的「设置 → 桃桃 AI」，在左侧「电脑端设置」开启「允许已配对设备使用桃桃 AI」。要让手机看到既有会话，可以开启下方的「向已配对设备共享当前账号的所有会话」，也可以在电脑上打开某条会话，点会话标题旁的「共享给已配对设备」。手机端打开历史会话后点「刷新」，使用时请保持电脑和桃桃便签在线。</p>
           </li>
         </ol>
       </dialog>

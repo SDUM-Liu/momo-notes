@@ -262,8 +262,14 @@ time { font-size: 11px; color: var(--muted); }
 .chat-scroll { overflow: auto; flex: 1; padding: 8px 13px; overflow-anchor: none; }
 .chat-scroll > button { align-self: start; }
 #codex-empty { margin: auto 0; text-align: center; color: var(--muted); }
-#codex-conversation-title { font-size: 15px; margin: 3px 0; overflow-wrap: anywhere; }
-#codex-conversation-title:empty { display: none; }
+#codex-conversation-bar {
+  display: flex; align-items: center; gap: 8px; padding: 4px 13px;
+  border-bottom: 1px solid var(--line);
+}
+#codex-conversation-title {
+  flex: 1; min-width: 0; font-size: 15px; margin: 3px 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
 .chat-message {
   align-self: start; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere;
   padding: 9px 11px; line-height: 1.55; border-radius: 4px 14px 14px; background: #f8f3f7;
@@ -303,7 +309,7 @@ time { font-size: 11px; color: var(--muted); }
 #codex-thread-list :is(strong, small) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #codex-thread-list small { color: var(--muted); margin-top: 3px; }
 #codex-thread-list small:empty { display: none; }
-#codex-host-config { border-top: 1px solid var(--line); padding: 7px 0; margin-top: 8px; }
+#codex-host-config { border-bottom: 1px solid var(--line); padding: 7px 0; margin-bottom: 8px; }
 #codex-host-config label { font-size: 11px; }
 #codex-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #codex-folder-label { overflow-wrap: anywhere; }

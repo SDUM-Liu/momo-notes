@@ -113,7 +113,9 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     }))
     $('codex-older').hidden = !cursor
     $('codex-empty').hidden = Boolean(select.value || history.length || currentJob)
-    $('codex-conversation-title').textContent = threads.find(item => item.id === select.value)?.title || ''
+    $('codex-conversation-bar').hidden = !select.value
+    const title = threads.find(item => item.id === select.value)?.title || (select.value ? '当前会话' : '')
+    $('codex-conversation-title').textContent = $('codex-conversation-title').title = title
   }
 
   function renderThreads() {
@@ -261,6 +263,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     if (showSettings && !api.mobile) {
       drawer(true)
       $('codex-host-config').open = true
+      $('codex-drawer').scrollTop = 0
     }
     void action(async () => {
       await Promise.all([refresh(), !api.mobile && api.codexSettings().then(drawConfig)])
