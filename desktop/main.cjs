@@ -77,6 +77,7 @@ function codexAction(op, data, paired = false) {
   }
   if (op === 'active') return codex.active(paired)
   if (op === 'models') return codex.models()
+  if (op === 'display-check') return codex.displayCheck(paired)
   if (op === 'list') return codex.list(data, paired)
   if (op === 'read') return codex.read(data, paired)
   if (op === 'send') return codex.send(data, paired)

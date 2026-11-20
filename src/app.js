@@ -58,7 +58,9 @@ function noteStatus(message, error = false) {
 }
 
 function showView(next) {
-  if (next !== 'ai' && $('ai-setup-dialog').open) $('ai-setup-dialog').close()
+  if (next !== 'ai') {
+    for (const dialog of document.querySelectorAll('#ai-view dialog[open]')) dialog.close()
+  }
   if (view === 'browser' && next !== 'browser') void api.hideBrowser()
   if (view === 'sync' && next !== 'sync') {
     ++qrRequest
@@ -856,13 +858,15 @@ $('settings-form').onsubmit = async event => {
 }
 
 let chatBack = 'note'
-function chatMode(notes) {
-  $('ai-mode-codex').setAttribute('aria-pressed', String(!notes))
+function chatMode(notes, work = false) {
+  $('ai-mode-codex').setAttribute('aria-pressed', String(!notes && !work))
+  $('ai-mode-work').setAttribute('aria-pressed', String(work))
   $('ai-mode-notes').setAttribute('aria-pressed', String(notes))
   $('codex-pane').hidden = notes
   $('note-ai-pane').hidden = !notes
   $('codex-drawer-toggle').hidden = $('codex-new').hidden = notes
   $('chat-model-bar').hidden = notes && $('ai-provider').value === 'api'
+  codexView.work(work)
   if (notes) codexView.drawer(false)
 }
 function openChat(back) {
@@ -890,6 +894,7 @@ $('ai-setup-docs').onclick = async () => {
   }
 }
 $('ai-mode-codex').onclick = () => chatMode(false)
+$('ai-mode-work').onclick = () => chatMode(false, true)
 $('ai-mode-notes').onclick = $('ai-provider').onchange = () => chatMode(true)
 const questionRequest = () => ({
   question: $('prompt').value.trim(), scope: $('scope').value, date: currentDate,

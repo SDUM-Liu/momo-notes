@@ -16,66 +16,108 @@ export async function followCodex(api, job, draw, current = () => true) {
   return job
 }
 
-function wireModelPicker(api, select, effort, status, errorMessage) {
-  const label = select.options[0].text
-  const key = 'momo.model.' + select.id
-  const effortKey = 'momo.effort.' + select.id
+function wireModelPicker(api, $, errorMessage) {
+  const key = 'momo.model.codex-model'
+  const effortKey = 'momo.effort.codex-effort'
   const labels = { none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' }
-  let preferred = '', preferredEffort = '', catalog = [], loading
+  const dialog = $('codex-choice-dialog')
+  let preferred = '', preferredEffort = '', catalog = [], loading, generation = 0
+  let choosing = 'model', status = '', failed = false
   try {
     preferred = localStorage.getItem(key) || ''
     preferredEffort = localStorage.getItem(effortKey) || ''
   } catch {}
-  function drawEfforts() {
-    const model = catalog.find(item => item.id === select.value) || catalog.find(item => item.isDefault)
-    const options = model?.efforts ?? []
-    const automatic = model?.defaultEffort ? '自动 · ' + (labels[model.defaultEffort] ?? model.defaultEffort) : '自动'
-    effort.replaceChildren(new Option(automatic, ''), ...options.map(value => new Option(labels[value] ?? value, value)))
-    effort.disabled = options.length === 0
-    if (options.includes(preferredEffort)) effort.value = preferredEffort
+  const chosenModel = () => catalog.find(item => item.id === preferred)
+  const activeModel = () => chosenModel() ?? catalog.find(item => item.isDefault)
+  const efforts = () => activeModel()?.efforts ?? []
+  const selectedEffort = () => efforts().includes(preferredEffort) ? preferredEffort : ''
+  function draw() {
+    $('codex-model').textContent = '模型 · ' + (chosenModel()?.label ?? '自动')
+    $('codex-effort').textContent = '思考程度 · ' + ((labels[selectedEffort()] ?? selectedEffort()) || '自动')
+    $('codex-model-status').textContent = status
+    $('codex-model-status').hidden = !status
+    if (!dialog.open) return
+    const model = activeModel()
+    const options = choosing === 'model' ? catalog : efforts().map(id => ({ id, label: labels[id] ?? id }))
+    const selected = choosing === 'model' ? chosenModel()?.id ?? '' : selectedEffort()
+    const automatic = choosing === 'model' ? catalog.find(item => item.isDefault)?.label
+      : labels[model?.defaultEffort] ?? model?.defaultEffort
+    const defaultLabel = automatic ? '自动 · ' + automatic : '自动'
+    $('codex-choice-title').textContent = choosing === 'model' ? '选择模型' : '选择思考程度'
+    $('codex-choice-status').textContent = status || (choosing === 'effort' && !options.length
+      ? '当前模型没有可选的思考程度。' : '')
+    $('codex-choice-retry').hidden = !failed
+    $('codex-choice-options').replaceChildren(...[{ id: '', label: defaultLabel }, ...options].map(item => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'quiet'
+      button.textContent = item.label
+      button.setAttribute('aria-pressed', String(item.id === selected))
+      button.onclick = () => {
+        if (choosing === 'model') preferred = item.id
+        else preferredEffort = item.id
+        try { localStorage.setItem(choosing === 'model' ? key : effortKey, item.id) } catch {}
+        dialog.close()
+        if (catalog.length && !failed) status = ''
+        draw()
+      }
+      return button
+    }))
   }
-  select.onchange = () => {
-    preferred = select.value
-    try { localStorage.setItem(key, preferred) } catch {}
-    drawEfforts()
-  }
-  effort.onchange = () => {
-    preferredEffort = effort.value
-    try { localStorage.setItem(effortKey, preferredEffort) } catch {}
-  }
-  drawEfforts()
   function load() {
-    if (!loading) {
-      status.hidden = true
-      loading = api.codex('models').then(models => {
-        catalog = models
-        select.replaceChildren(new Option(label, ''), ...models.map(item => new Option(item.label, item.id)))
-        if (models.some(item => item.id === preferred)) select.value = preferred
-        else if (preferred) {
-          status.textContent = '上次选择的模型目前不可用，已选用默认项。'
-          status.hidden = false
-        }
-        drawEfforts()
-      }).catch(error => {
-        status.textContent = '模型列表加载失败，可使用当前选项。' + errorMessage(error)
-        status.hidden = false
-      }).finally(() => { loading = undefined })
-    }
+    if (loading) return loading
+    const before = generation
+    failed = false
+    status = '正在从电脑加载模型…'
+    draw()
+    loading = api.codex('models').then(models => {
+      if (before !== generation) return
+      if (!Array.isArray(models)) throw new Error('电脑返回的模型列表格式有误')
+      catalog = models
+      failed = !catalog.length
+      status = failed ? '电脑未返回可用模型。' : preferred && !chosenModel() ? '上次选择的模型已不可用，现使用自动选项。' : ''
+    }).catch(error => {
+      if (before !== generation) return
+      failed = true
+      status = '模型加载失败。' + errorMessage(error)
+    }).finally(() => {
+      if (before !== generation) return
+      loading = undefined
+      draw()
+    })
     return loading
   }
-  return { load, options: () => ({ model: select.value, effort: effort.value }) }
+  for (const field of ['model', 'effort']) {
+    $('codex-' + field).onclick = () => {
+      choosing = field
+      dialog.showModal()
+      draw()
+      if (!catalog.length && !failed) void load()
+    }
+  }
+  $('codex-choice-retry').onclick = () => { void load() }
+  return {
+    load, options: () => ({ model: chosenModel()?.id ?? '', effort: selectedEffort() }),
+    reset() {
+      ++generation
+      catalog = []; loading = undefined; status = ''; failed = false
+      if (dialog.open) dialog.close()
+      draw()
+    },
+  }
 }
 
 export function wireCodex(api, errorMessage, routeToNotes) {
   const $ = id => document.getElementById(id)
   const select = $('codex-thread')
-  const model = wireModelPicker(api, $('codex-model'), $('codex-effort'), $('codex-model-status'), errorMessage)
+  const model = wireModelPicker(api, $, errorMessage)
   let config, threads = [], cursor, history = [], currentJob, listCursor
   let watching = false
   let request = 0
   let scope = 0
   let listRequest = 0
   let retryOlder = false
+  let taskMode = false
   const scroll = $('codex-messages')
   const promptBox = $('codex-prompt')
   const bottom = () => { scroll.scrollTop = scroll.scrollHeight }
@@ -144,6 +186,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
   function clearOutput() {
     currentJob = undefined
     $('codex-pending').hidden = $('codex-output').hidden = $('codex-log').hidden = true
+    $('codex-activity').hidden = true
   }
 
   async function read(older = false) {
@@ -239,6 +282,11 @@ export function wireCodex(api, errorMessage, routeToNotes) {
         await load(result.threadId)
         if (before !== scope) return
         if (result.output && !history.some(item => item.role === 'Codex' && item.text.includes(result.output))) draw(result)
+        else {
+          drawActivity(result)
+          $('codex-log').querySelector('pre').textContent = result.log
+          $('codex-log').hidden = !result.log
+        }
       }
       return result
     } finally {
@@ -327,6 +375,35 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     if (currentJob?.turnId) await api.codex('interrupt', currentJob.id)
   })
 
+  $('codex-display-check').onclick = () => {
+    const before = scope
+    const button = $('codex-display-check')
+    const report = $('codex-display-report')
+    button.disabled = true
+    report.textContent = '正在读取电脑的显示设备和系统事件…'
+    report.hidden = !taskMode
+    bottom()
+    void api.codex('display-check').then(result => {
+      if (before === scope) report.textContent = result
+    }).catch(error => {
+      if (before === scope) report.textContent = errorMessage(error)
+    }).finally(() => {
+      if (before !== scope) return
+      button.disabled = false
+      if (taskMode) bottom()
+    })
+  }
+
+  function drawActivity(job) {
+    const activity = $('codex-activity')
+    activity.hidden = !job.taskMode
+    activity.textContent = job.awaitingApproval ? '等待电脑端确认权限'
+      : job.runningCommand && job.status === 'running' ? '正在电脑上运行命令'
+        : job.commandsRun ? '电脑已运行 ' + job.commandsRun + ' 条命令'
+          : job.commandDeclined ? '命令未获授权' : job.status === 'running' ? '正在等待电脑端工具'
+            : '这次没有命令执行记录'
+  }
+
   function draw(job) {
     currentJob = job
     $('codex-output').textContent = job.output
@@ -337,6 +414,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     $('codex-log').querySelector('pre').textContent = job.log
     $('codex-log').hidden = !job.log
     $('codex-stop').hidden = job.status !== 'running' || !job.turnId
+    drawActivity(job)
     $('codex-status').textContent = job.status === 'running'
       ? job.retrying ? '电脑正在重试请求…' : '电脑正在处理。若需要额外权限，请在电脑上确认。'
       : job.status === 'interrupted' ? '已停止' : job.status === 'failed' ? job.error : '已完成'
@@ -347,7 +425,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     event.preventDefault()
     if (watching) return
     const prompt = promptBox.value.trim()
-    if (!prompt || (!select.value && routeToNotes(prompt))) {
+    if (!prompt || (!taskMode && !select.value && routeToNotes(prompt))) {
       if (prompt) promptBox.value = ''
       return
     }
@@ -356,7 +434,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
       $('codex-status').textContent = '正在连接主机…'
       try {
         const result = await observe(async () => {
-          const job = await api.codex('send', { id: select.value || null, prompt, ...model.options() })
+          const job = await api.codex('send', { id: select.value || null, prompt, taskMode, ...model.options() })
           if (before === scope && promptBox.value.trim() === prompt) promptBox.value = ''
           return job
         })
@@ -376,6 +454,12 @@ export function wireCodex(api, errorMessage, routeToNotes) {
   }
   return {
     open, model, drawer,
+    work(enabled) {
+      taskMode = enabled
+      $('codex-task-tools').hidden = !enabled
+      $('codex-display-report').hidden = !enabled || !$('codex-display-report').textContent
+      promptBox.placeholder = enabled ? '让电脑执行或检查什么？' : '给桃桃 AI 发消息'
+    },
     reset() {
       ++scope
       ++request
@@ -384,6 +468,10 @@ export function wireCodex(api, errorMessage, routeToNotes) {
       history = []
       cursor = listCursor = currentJob = undefined
       watching = false
+      model.reset()
+      $('codex-display-check').disabled = false
+      $('codex-display-report').textContent = ''
+      $('codex-display-report').hidden = $('codex-activity').hidden = true
       select.replaceChildren(new Option('新会话', ''))
       select.disabled = false
       $('codex-send').disabled = false

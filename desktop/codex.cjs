@@ -2,6 +2,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 const { appServer } = require('./codex-rpc.cjs')
+const { checkDisplay } = require('./display-check.cjs')
 const { scopedNotes } = require('../shared/note-query.mjs')
 
 const textInput = text => [{ type: 'text', text, text_elements: [] }]
@@ -195,6 +196,15 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
         if (job.turnId && params.turnId && job.turnId !== params.turnId) return
         if (method === 'item/agentMessage/delta') job.output = (job.output + params.delta).slice(-limit)
         if (method === 'item/commandExecution/outputDelta') job.log = (job.log + params.delta).slice(-12000)
+        if (params.item?.type === 'commandExecution') {
+          if (method === 'item/started') job.runningCommand = true
+          if (method === 'item/completed') {
+            job.runningCommand = false
+            if (typeof params.item.exitCode === 'number') job.commandsRun = (job.commandsRun ?? 0) + 1
+            else if (params.item.status === 'declined') job.commandDeclined = true
+            if (!job.log && params.item.aggregatedOutput) job.log = params.item.aggregatedOutput.slice(-12000)
+          }
+        }
         if (method === 'error' && params.willRetry) job.retrying = true
         if (method === 'item/started' || method === 'item/agentMessage/delta') job.retrying = false
         if (method === 'item/completed' && params.item?.type === 'agentMessage' && params.item.text && !job.output) {
@@ -301,9 +311,11 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     if (!remote) {
       const client = spawnServer({
         onRequest(method, params) {
-          if (params.threadId !== activeRemote?.threadId) return
+          const job = activeRemote
+          if (!job?.threadId || params.threadId !== job.threadId) return
           if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
-            return approve(method, params).then(decision => ({ decision }))
+            job.awaitingApproval = true
+            return approve(method, params).then(decision => ({ decision })).finally(() => { job.awaitingApproval = false })
           }
           if (method === 'item/permissions/requestApproval') return { permissions: {}, scope: 'turn' }
         },
@@ -405,6 +417,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
     const job = newJob('work', '桃桃 AI')
     job.prompt = prompt
     job.paired = paired
+    job.taskMode = request.taskMode === true
     activeRemote = job
     void (async () => {
       try {
@@ -432,7 +445,10 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
           : await client.request('thread/start', opts)
         if (paired && !request.id) saveShare(response.thread.id, true)
         job.threadId = response.thread.id
-        await turn(client, job, textInput(prompt), {
+        const input = job.taskMode
+          ? '在当前电脑上执行以下任务。请用本机工具收集可验证的证据。若权限或连接阻止检查，说明具体哪步没做；不要把推测写成检查结果。\n\n' + prompt
+          : prompt
+        await turn(client, job, textInput(input), {
           cwd: folder, approvalPolicy: 'on-request', approvalsReviewer: 'user', ...modelOption, ...effort,
           sandboxPolicy: writable
             ? { type: 'workspaceWrite', writableRoots: [folder], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
@@ -451,6 +467,12 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
   return {
     ask, jobResult, settings, configure, share, list, read, send,
     folder: scope,
+    async displayCheck(paired) {
+      requireRemote(paired)
+      const report = await checkDisplay()
+      requireRemote(paired)
+      return report
+    },
     async models() {
       const models = await listModels(await workClient())
       return [...models.values()].map(model => ({

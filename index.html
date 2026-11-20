@@ -196,11 +196,12 @@
       </header>
       <div class="chat-modes" aria-label="回答方式">
         <button id="ai-mode-codex" type="button" aria-pressed="true">对话</button>
+        <button id="ai-mode-work" type="button" aria-pressed="false">电脑任务</button>
         <button id="ai-mode-notes" type="button" aria-pressed="false">便签问答</button>
       </div>
       <div id="chat-model-bar" class="chat-models">
-        <label>模型<select id="codex-model"><option value="">自动</option></select></label>
-        <label>思考程度<select id="codex-effort"><option value="">自动</option></select></label>
+        <button id="codex-model" class="quiet" type="button" aria-haspopup="dialog">模型 · 自动</button>
+        <button id="codex-effort" class="quiet" type="button" aria-haspopup="dialog">思考程度 · 自动</button>
         <small id="codex-model-status" role="status" hidden></small>
       </div>
       <button type="button" id="codex-scrim" aria-label="关闭会话列表" hidden></button>
@@ -231,6 +232,9 @@
         <button id="codex-more" type="button" class="quiet" hidden>更多会话</button>
       </aside>
       <div id="codex-pane" class="chat-pane">
+        <div id="codex-task-tools" hidden>
+          <button id="codex-display-check" class="quiet" type="button">检查黑屏记录</button>
+        </div>
         <div id="codex-conversation-bar" hidden>
           <h2 id="codex-conversation-title"></h2>
           <button id="codex-share" type="button" class="quiet desktop-only" hidden>共享会话</button>
@@ -244,7 +248,9 @@
           <div id="codex-pending" class="chat-message from-user" hidden></div>
           <div id="codex-output" class="chat-message" hidden></div>
           <details id="codex-log" hidden><summary>命令输出</summary><pre></pre></details>
+          <div id="codex-display-report" class="chat-message" role="status" hidden></div>
         </div>
+        <p id="codex-activity" class="chat-status" role="status" hidden></p>
         <p id="codex-status" class="chat-status" role="status"></p>
         <form id="codex-form" class="chat-composer">
           <textarea id="codex-prompt" rows="2" required maxlength="12000" aria-label="消息" placeholder="给桃桃 AI 发消息"></textarea>
@@ -272,7 +278,16 @@
           </div>
         </form>
       </div>
-      <dialog id="ai-setup-dialog" aria-labelledby="ai-setup-title">
+      <dialog id="codex-choice-dialog" class="chat-dialog" aria-labelledby="codex-choice-title">
+        <form class="ai-setup-head" method="dialog">
+          <h2 id="codex-choice-title"></h2>
+          <button type="submit" class="quiet" autofocus>关闭</button>
+        </form>
+        <p id="codex-choice-status" role="status"></p>
+        <div id="codex-choice-options"></div>
+        <button id="codex-choice-retry" class="quiet" type="button">重新加载</button>
+      </dialog>
+      <dialog id="ai-setup-dialog" class="chat-dialog" aria-labelledby="ai-setup-title">
         <form class="ai-setup-head" method="dialog">
           <h2 id="ai-setup-title">配置桃桃 AI</h2>
           <button type="submit" class="quiet" autofocus>关闭</button>
