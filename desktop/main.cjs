@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, nativeImage, safeStorage, powerMonitor, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, session, dialog, nativeImage, safeStorage, powerMonitor, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
@@ -13,6 +13,7 @@ const { codexSetupUrl } = require('../shared/links.mjs')
 const { defaultCategory, noteKey, newCategory, datesFor, newDayNote } = require('../shared/notes.mjs')
 const { createSync } = require('./sync.cjs')
 const { createCodex } = require('./codex.cjs')
+const { appServer } = require('./codex-rpc.cjs')
 
 app.setName('Momo Notes')
 if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-notes')
@@ -82,6 +83,18 @@ function codexAction(op, data, paired = false) {
   if (op === 'read') return codex.read(data, paired)
   if (op === 'send') return codex.send(data, paired)
   throw new Error('未知的桃桃 AI 请求')
+}
+
+async function launchHostCodex(options) {
+  const port = store.data.settings.proxyPort
+  if (port) {
+    validateProxyPort(port)
+    return appServer({ ...options, proxy: 'http://127.0.0.1:' + port })
+  }
+  const rules = await session.defaultSession.resolveProxy('https://chatgpt.com/').catch(() => '')
+  const systemProxy = /^(PROXY|HTTPS)\s+([a-z\d.-]+:\d{1,5}|\[[a-f\d:]+\]:\d{1,5})$/i.exec(rules.split(';')[0].trim())
+  const proxy = systemProxy && (systemProxy[1].toUpperCase() === 'HTTPS' ? 'https://' : 'http://') + systemProxy[2]
+  return appServer({ ...options, proxy })
 }
 
 async function approveCodex(method, request) {
@@ -300,7 +313,7 @@ function start() {
   browser = createBrowser(win, value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
   })
-  codex = createCodex(app.getPath('userData'), store, approveCodex)
+  codex = createCodex(app.getPath('userData'), store, approveCodex, launchHostCodex)
   sync = createSync(app.getPath('userData'), store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
   }, (op, payload) => codexAction(op, payload, true))

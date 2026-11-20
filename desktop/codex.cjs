@@ -260,7 +260,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
         const skill = path.join(cwd, '.agents', 'skills', noteSkillName, 'SKILL.md')
         fs.mkdirSync(path.dirname(skill), { recursive: true })
         fs.copyFileSync(path.join(__dirname, 'skills', noteSkillName, 'SKILL.md'), skill)
-        client = spawnServer({
+        client = await spawnServer({
           cwd, noteMode: true,
           onRequest(method, params) {
             if (method !== 'item/tool/call' || params.threadId !== job.threadId || params.tool !== notesTool.name) return
@@ -309,23 +309,29 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
 
   async function workClient() {
     if (!remote) {
-      const client = spawnServer({
-        onRequest(method, params) {
-          const job = activeRemote
-          if (!job?.threadId || params.threadId !== job.threadId) return
-          if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
-            job.awaitingApproval = true
-            return approve(method, params).then(decision => ({ decision })).finally(() => { job.awaitingApproval = false })
-          }
-          if (method === 'item/permissions/requestApproval') return { permissions: {}, scope: 'turn' }
-        },
-      })
-      remote = authenticated(client).then(() => client)
-      client.events.on('notification', method => {
-        if (method === 'account/updated') catalog = null
-      })
-      client.events.once('closed', () => { remote = null; catalog = null })
-      remote.catch(() => { client.close(); remote = null })
+      const operation = (async () => {
+        const client = await spawnServer({
+          onRequest(method, params) {
+            const job = activeRemote
+            if (!job?.threadId || params.threadId !== job.threadId) return
+            if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') {
+              job.awaitingApproval = true
+              return approve(method, params).then(decision => ({ decision })).finally(() => { job.awaitingApproval = false })
+            }
+            if (method === 'item/permissions/requestApproval') return { permissions: {}, scope: 'turn' }
+          },
+        })
+        client.events.on('notification', method => {
+          if (method === 'account/updated') catalog = null
+        })
+        client.events.once('closed', () => {
+          if (remote === operation) { remote = null; catalog = null }
+        })
+        try { await authenticated(client) } catch (error) { client.close(); throw error }
+        return client
+      })()
+      remote = operation
+      void operation.catch(() => { if (remote === operation) remote = null })
     }
     return remote
   }

@@ -28,7 +28,7 @@ function codexExecutable() {
   throw new Error('电脑上找不到 Codex CLI。请打开「桃桃 AI → 配置教程」，按步骤安装并登录。')
 }
 
-function appServer({ cwd, noteMode = false, onRequest = async () => undefined, launch = spawn }) {
+function appServer({ cwd, proxy, noteMode = false, onRequest = async () => undefined, launch = spawn }) {
   const args = ['app-server', '--listen', 'stdio://', '-c', 'forced_login_method="chatgpt"']
   if (noteMode) {
     args.push('--disable', 'shell_tool', '--disable', 'apps', '--disable', 'plugins', '--disable', 'memories',
@@ -40,6 +40,10 @@ function appServer({ cwd, noteMode = false, onRequest = async () => undefined, l
   // This process uses the standalone CLI and has no ChatGPT desktop package identity.
   delete env.CODEX_WINDOWS_REGISTERED_CORE
   delete env.CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY
+  if (proxy) {
+    env.HTTP_PROXY = env.http_proxy = proxy
+    env.HTTPS_PROXY = env.https_proxy = proxy
+  }
   const child = launch(codexExecutable(), args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   const events = new EventEmitter()
   const pending = new Map()
