@@ -77,7 +77,7 @@ async function ask(request) {
 }
 
 function codexAction(op, data, paired = false) {
-  if (op === 'notes') return codex.ask(data)
+  if (op === 'notes') return codex.ask(data, paired)
   if (op === 'job' || op === 'interrupt') {
     const job = codex.jobResult(data, paired)
     return op === 'job' ? job : codex.interrupt(data)
@@ -167,7 +167,9 @@ function registerIPC() {
   handle('follower:reconcile', follower.reconcile)
   handle('codex:action', (op, data) => codexAction(op, data))
   handle('codex:settings', codex.settings)
-  handle('codex:configure', values => codex.configure({ enabled: values.enabled, write: values.write, shareAll: values.shareAll }))
+  handle('codex:configure', values => codex.configure(Object.fromEntries(
+    ['enabled', 'fullAccess', 'write', 'shareAll'].filter(key => typeof values?.[key] === 'boolean').map(key => [key, values[key]]),
+  )))
   handle('codex:share', codex.share)
   handle('codex:folder', async action => {
     if (action === 'reset') return codex.configure({ folder: null })

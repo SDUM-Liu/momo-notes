@@ -140,6 +140,8 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     $('codex-folder-reset').hidden = value.defaultFolder
     $('codex-remote').checked = value.enabled
     $('codex-all').checked = value.shareAll
+    $('codex-full-access').checked = value.fullAccess !== false
+    $('codex-write-setting').hidden = $('codex-full-access').checked
     $('codex-write').checked = value.write
     $('codex-share').hidden = !threads.some(item => item.id === select.value) || value.shareAll
   }
@@ -339,12 +341,12 @@ export function wireCodex(api, errorMessage, routeToNotes) {
         }
       })
     }
-    for (const field of ['codex-remote', 'codex-write', 'codex-all']) {
+    for (const [field, setting] of Object.entries({
+      'codex-remote': 'enabled', 'codex-full-access': 'fullAccess', 'codex-write': 'write', 'codex-all': 'shareAll',
+    })) {
       $(field).onchange = () => action(async () => {
         try {
-          drawConfig(await api.codexConfigure({
-            enabled: $('codex-remote').checked, write: $('codex-write').checked, shareAll: $('codex-all').checked,
-          }))
+          drawConfig(await api.codexConfigure({ [setting]: $(field).checked }))
           if (field === 'codex-all') await load()
         } catch (error) {
           drawConfig(await api.codexSettings())
@@ -416,7 +418,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
     $('codex-stop').hidden = job.status !== 'running' || !job.turnId
     drawActivity(job)
     $('codex-status').textContent = job.status === 'running'
-      ? job.retrying ? '电脑正在重试请求…' : '电脑正在处理。若需要额外权限，请在电脑上确认。'
+      ? job.awaitingApproval ? '请在电脑上确认这次权限请求。' : job.retrying ? '电脑正在重试请求…' : '电脑正在处理…'
       : job.status === 'interrupted' ? '已停止' : job.status === 'failed' ? job.error : '已完成'
     bottom()
   }

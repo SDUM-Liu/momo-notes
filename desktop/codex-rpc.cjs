@@ -28,11 +28,12 @@ function codexExecutable() {
   throw new Error('电脑上找不到 Codex CLI。请打开「桃桃 AI → 配置教程」，按步骤安装并登录。')
 }
 
-function appServer({ cwd, proxy, noteMode = false, onRequest = async () => undefined, launch = spawn }) {
+function appServer({ cwd, proxy, noteMode = false, fullAccess = false, onRequest = async () => undefined, launch = spawn }) {
   const args = ['app-server', '--listen', 'stdio://', '-c', 'forced_login_method="chatgpt"']
   if (noteMode) {
-    args.push('--disable', 'shell_tool', '--disable', 'apps', '--disable', 'plugins', '--disable', 'memories',
-      '--disable', 'multi_agent', '--disable', 'multi_agent_v2', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}')
+    if (!fullAccess) args.push('--disable', 'shell_tool', '-c', 'web_search="disabled"')
+    args.push('--disable', 'apps', '--disable', 'plugins', '--disable', 'memories',
+      '--disable', 'multi_agent', '--disable', 'multi_agent_v2', '-c', 'mcp_servers={}')
   }
   const env = { ...process.env }
   delete env.OPENAI_API_KEY

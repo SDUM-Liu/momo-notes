@@ -225,7 +225,9 @@
             <button id="codex-folder" class="quiet" type="button">更换目录</button>
             <button id="codex-folder-reset" class="quiet" type="button" hidden>恢复默认目录</button>
           </div>
-          <label class="switch-row">允许在所选目录内写入<input id="codex-write" type="checkbox"></label>
+          <label class="switch-row">完全访问权限<input id="codex-full-access" type="checkbox" role="switch" checked aria-describedby="codex-full-access-hint"></label>
+          <p id="codex-full-access-hint">开启后，桃桃 AI 可以访问当前系统账号可用的文件和网络，运行命令时无需在电脑上确认。</p>
+          <label id="codex-write-setting" class="switch-row" hidden>允许在所选目录内写入<input id="codex-write" type="checkbox"></label>
         </details>
         <form id="codex-search-form">
           <input id="codex-search" type="search" aria-label="查找会话" maxlength="100" placeholder="搜索标题或项目">
