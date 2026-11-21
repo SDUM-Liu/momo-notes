@@ -8,7 +8,10 @@ import { codexSetupUrl, webUrl } from '../shared/links.mjs'
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
 import { mobileUpdates } from './mobile-updates.js'
-import { digest } from '../shared/sync.mjs'
+import { digest, parsePairing } from '../shared/sync.mjs'
+import { createHostSync } from '../shared/host-sync.mjs'
+import { createUpdateSource } from '../shared/update-transfer.mjs'
+import relayDefaults from '../shared/relay.json'
 
 const keyName = 'ai-key'
 const noop = () => {}
@@ -45,10 +48,11 @@ export function createMobileBridge() {
   const floatingPet = platform === 'android' && Capacitor.isPluginAvailable('MomoPet')
   const updates = mobileUpdates(native, async () => {
     if (floatingPet && document.documentElement.dataset.momoFloating === 'true') await petOverlay.foreground()
-  })
+  }, () => !hostSelected && sync.state().enabled ? sync.update : null)
   const ready = openDatabase()
   const notes = Object.create(null)
   const records = Object.create(null)
+  const revisions = Object.create(null)
   let localDrafts = {}
   let namespace = ''
   let categories = [...builtInCategories]
@@ -57,14 +61,16 @@ export function createMobileBridge() {
   let today
   let settings = { ...defaultSettings }
   let hasKey = false
+  let hostSelected = false, host, hostConfig = {}, hostSave = Promise.resolve(), changingRole = false
   let browser = { url: '', loading: false, canGoBack: false, error: '' }
   let onState = noop, onDay = noop, onBrowser = noop, onNotes = noop, onSync = noop
   let lastWidget = ''
   const publicSettings = () => ({ ...settings, hasKey })
   const state = () => ({
-    mode, today, settings: publicSettings(), browser, categories, locked: sync.state().locked,
+    mode, today, settings: publicSettings(), browser, categories, locked: syncStatus().locked, mobileHost: hostSelected,
     update: updates.state,
   })
+  const syncStatus = () => hostSelected ? host.state() : sync.state()
 
   function queueWrite(operation) {
     const result = writes.then(operation)
@@ -100,6 +106,7 @@ export function createMobileBridge() {
     await transaction(await ready, 'notes', true, store => store.put({ date: namespace + key, ...record }))
     records[key] = record
     notes[key] = record.doc
+    if (record.rev) revisions[key] = record.rev
   }
 
   async function keepDraft(key, doc) {
@@ -109,6 +116,7 @@ export function createMobileBridge() {
 
   function saveNote(date, doc, category = defaultCategory, base) {
     const key = noteKey(category, date)
+    if (hostSelected) return host.write({ key, doc, base: base ?? records[key]?.rev })
     return queueWrite(async () => {
       const previous = records[key]
       const rev = previous?.dirty || base === undefined ? (previous?.rev ?? null) : base
@@ -143,20 +151,20 @@ export function createMobileBridge() {
       const source = hidden ? [] : migrating ? saved.filter(item => !item.date.includes('/')) : loaded
 
       namespace = next
-      for (const key of Object.keys(records)) { delete records[key]; delete notes[key] }
+      for (const key of Object.keys(records)) { delete records[key]; delete notes[key]; delete revisions[key] }
       categories = storedCategories ?? [...builtInCategories]
       localDrafts = storedDrafts ?? {}
       for (const { date, doc, rev, dirty } of source) {
         const key = date.slice(previous.length)
-        const record = { doc, rev: rev ?? null, dirty: dirty ?? hasContent(doc) }
+        const record = { doc, rev: rev ?? (hostSelected ? digest(JSON.stringify(doc)) : null), dirty: dirty ?? hasContent(doc) }
         if (migrating) await writeRecord(key, record)
-        else { records[key] = record; notes[key] = doc }
+        else { records[key] = record; notes[key] = doc; if (record.rev) revisions[key] = record.rev }
       }
       if (migrating) {
         await transaction(db, 'settings', true, store => store.put(categories, namespace + 'categories'))
         await transaction(db, 'settings', true, store => store.put(localDrafts, namespace + 'drafts'))
       }
-      onNotes({ categories, profileChanged: true })
+      onNotes({ categories, profileChanged: true, locked: syncStatus().locked })
       updateWidget()
     })
   }
@@ -170,6 +178,34 @@ export function createMobileBridge() {
       onNotes({ categories })
     })
   }
+
+  const primaryStore = {
+    get data() { return { notes, revisions, categories } },
+    addCategory: item => mergeCategories([item]),
+    async saveNote(day, doc, category) {
+      const key = noteKey(category, day)
+      const rev = digest(JSON.stringify(doc))
+      await queueWrite(() => writeRecord(key, { doc, rev, dirty: false }))
+      updateWidget()
+      return rev
+    },
+    async today(category) {
+      const day = localDay()
+      if (!notes[noteKey(category, day)]) await this.saveNote(day, newDayNote(notes, category, day), category)
+      return day
+    },
+  }
+
+  const hostUpdates = createUpdateSource(async (url, range) => {
+    const response = await CapacitorHttp.get({
+      url, responseType: range ? 'arraybuffer' : 'text',
+      headers: range ? { Range: range, 'Accept-Encoding': 'identity' } : { Accept: 'application/vnd.github+json, text/plain' },
+      connectTimeout: 12000, readTimeout: 35000,
+    })
+    return { status: response.status, range: Object.entries(response.headers ?? {})
+      .find(([name]) => name.toLowerCase() === 'content-range')?.[1],
+    data: typeof response.data === 'string' ? response.data : JSON.stringify(response.data) }
+  })
 
   async function refreshDay() {
     const date = localDay()
@@ -197,7 +233,7 @@ export function createMobileBridge() {
   const syncLink = mobileSyncLink(connection => sync.disconnected(connection), diagnoseSync)
   const sync = mobileSync({
     exchange: syncLink.exchange,
-    loadCode: () => native ? SecureStorage.getItem('sync-pair').catch(() => null) : Promise.resolve(null),
+    loadCode: () => native && !hostSelected ? SecureStorage.getItem('sync-pair').catch(() => null) : Promise.resolve(null),
     saveCode: code => {
       if (!native) throw new Error('请在移动安装版中配对')
       return code ? SecureStorage.setItem('sync-pair', code) : SecureStorage.removeItem('sync-pair')
@@ -223,6 +259,7 @@ export function createMobileBridge() {
       })
     },
     change: value => {
+      if (hostSelected) return
       onSync(value)
       onNotes({ locked: value.locked })
     },
@@ -230,6 +267,23 @@ export function createMobileBridge() {
   const backgroundSync = () => sync.run().catch(noop)
   const init = ready.then(async db => {
     settings = { ...settings, ...await transaction(db, 'settings', false, store => store.get('user')) }
+    hostSelected = Boolean(await transaction(db, 'settings', false, store => store.get('primary-role')))
+    if (native) {
+      const saved = await SecureStorage.getItem('sync-host').catch(() => null)
+      if (saved) { try { hostConfig = JSON.parse(saved) } catch {} }
+    }
+    host = createHostSync({ config: hostConfig, store: primaryStore, defaults: relayDefaults, update: hostUpdates,
+      persist() {
+        const value = JSON.stringify(hostConfig)
+        hostSave = hostSave.catch(noop).then(() => SecureStorage.setItem('sync-host', value))
+        void hostSave.catch(noop)
+      },
+      notify(value) {
+        if (!hostSelected) return
+        onNotes(value)
+        onSync(host.state())
+      },
+    })
     await sync.init()
     if (native) {
       hasKey = Boolean(await SecureStorage.getItem(keyName).catch(() => null))
@@ -256,6 +310,7 @@ export function createMobileBridge() {
 
   return {
     mobile: true,
+    supportsFollower: true,
     platform,
     floatingPet,
     liveScan: native && Capacitor.isPluginAvailable('CapacitorBarcodeScanner'),
@@ -268,8 +323,42 @@ export function createMobileBridge() {
     onBrowser: callback => { onBrowser = callback },
     onNotes: callback => { onNotes = callback },
     onSync: callback => { onSync = callback },
-    syncState: sync.state,
-    pairSync: sync.pairWith,
+    async syncState() { await init; return syncStatus() },
+    async selectSyncRole(role) {
+      await init
+      if (changingRole) throw new Error('正在切换设备角色')
+      const next = role === 'host'
+      if (next === hostSelected) return syncStatus()
+      if (next && sync.state().enabled) throw new Error('请先取消从设备配对')
+      if (!next && host.state().enabled) throw new Error('请先停止主设备同步')
+      changingRole = true
+      try {
+        await transaction(await ready, 'settings', true, store => store.put(next, 'primary-role'))
+        hostSelected = next
+        await activate(undefined)
+        updates.routeChanged()
+        onState(state())
+        return syncStatus()
+      } finally { changingRole = false }
+    },
+    async enableSync(enabled, relay, fallback) {
+      await init
+      if (!hostSelected || !native) throw new Error('请在移动安装版中选择主设备')
+      const value = host.setEnabled(enabled, relay, fallback)
+      await hostSave
+      return value
+    },
+    async syncLink() { await init; return hostSelected ? host.link() : null },
+    async syncLinkStatus(...args) { return host.status(...args) },
+    async syncCode() { return host.code() },
+    async rotateSync() { const value = host.rotate(); await hostSave; return value },
+    syncExchange: value => hostSelected ? host.exchange(value) : null,
+    async pairSync(code) {
+      await init
+      if (hostSelected || changingRole) throw new Error('请先切换为从设备')
+      if (host.owns(parsePairing(code).key)) throw new Error('不能配对本机的配对码')
+      try { return await sync.pairWith(code) } finally { updates.routeChanged() }
+    },
     testSync: sync.test,
     async scanSyncCode() {
       if (floatingPet) {
@@ -292,10 +381,14 @@ export function createMobileBridge() {
     async unpairSync() {
       const result = await sync.unpair()
       syncLink.close()
+      updates.routeChanged()
       return result
     },
     runSync: sync.run,
-    codex: sync.codex,
+    async codex(...args) {
+      if (hostSelected) throw new Error('手机作为主设备时，桃桃 AI 不可用')
+      return sync.codex(...args)
+    },
     syncDrafts: () => localDrafts,
     onUpdate: updates.onUpdate,
     browserViewport: noop,
@@ -316,6 +409,7 @@ export function createMobileBridge() {
     },
     async addCategory(name) {
       const item = newCategory(name)
+      if (hostSelected) return host.category(item)
       await mergeCategories(await sync.addCategory(item))
       return categories
     },
@@ -342,6 +436,7 @@ export function createMobileBridge() {
       return publicSettings()
     },
     async ask(request) {
+      if (hostSelected) throw new Error('手机作为主设备时，桃桃 AI 不可用')
       if (sync.state().enabled) return sync.ask(request)
       const data = modelPayload({ notes, settings }, request)
       if (!native) throw new Error('请在移动安装版中连接 AI')

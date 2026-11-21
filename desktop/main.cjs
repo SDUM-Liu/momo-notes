@@ -5,6 +5,7 @@ const { openStore } = require('./data.cjs')
 const { fit, position, center, nearestEdge } = require('./window.cjs')
 const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
+const { desktopUpdateSource } = require('./update-source.cjs')
 const { createInstallerDownloads } = require('./installers.cjs')
 const { createBrowser } = require('./browser.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
@@ -132,6 +133,7 @@ function registerIPC() {
   handle('updates:check', updates.check)
   handle('updates:download', updates.download)
   handle('updates:install', updates.install)
+  handle('updates:transfer-reply', updates.reply)
   handle('installers:catalog', installers.catalog)
   handle('installers:download', installers.download)
   handle('installers:reveal', installers.reveal)
@@ -328,6 +330,9 @@ function start() {
   win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   updates = createUpdates(value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
+  }, request => {
+    if (quitting || win.isDestroyed()) throw new Error('更新已取消')
+    win.webContents.send('updates:transfer', request)
   })
   updates.setAutomatic(store.data.settings.autoInstallUpdates)
   installers = createInstallerDownloads(progress => {
@@ -344,15 +349,19 @@ function start() {
     open: sealed => safeStorage.decryptString(Buffer.from(sealed, 'base64')),
   }, change => {
     if (quitting || win.isDestroyed()) return
-    if (change.profileChanged) today = follower.store ? localDay() : store.today()
+    if (change.profileChanged) {
+      today = follower.store ? localDay() : store.today()
+      updates.source(follower.snapshot()?.id)
+    }
     win.webContents.send('notes:changed', { ...change,
       ...(change.profileChanged && { categories: notesStore().data.categories, locked: notesLocked() }) })
   })
   if (!follower.store) today = store.today()
+  updates.source(follower.snapshot()?.id)
   codex = createCodex(app.getPath('userData'), { get data() { return notesStore().data } }, approveCodex, launchHostCodex)
   sync = createSync(app.getPath('userData'), store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
-  }, (op, payload) => codexAction(op, payload, true))
+  }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort))
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
   win.on('close', event => {

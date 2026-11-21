@@ -5,7 +5,7 @@ on:
     inputs:
       version:
         description: Published Android version, without v
-        default: '0.5.4'
+        default: '0.8.0'
         type: string
       build_run:
         description: Use the signed Android artifact from this build run instead

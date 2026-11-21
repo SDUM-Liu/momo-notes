@@ -516,7 +516,7 @@ function renderEdgePreview() {
 
 function drawUpdate(update) {
   updateState = update
-  const { status, target, progress, error } = update
+  const { status, target, progress, error, viaHost } = update
   const messages = {
     idle: '',
     unavailable: '请使用对应平台的安装包更新',
@@ -539,7 +539,8 @@ function drawUpdate(update) {
     installing: '安装中', 'download-error': '重新下载', 'install-error': '重试安装',
   }
   $('app-version').textContent = '当前版本 v' + update.version
-  $('update-status').textContent = error || messages[status]
+  $('update-status').textContent = error || (viaHost && status !== 'unavailable'
+    ? ['通过主设备更新', messages[status]].filter(Boolean).join(' · ') : messages[status])
   $('update-status').classList.toggle('error', status.endsWith('-error'))
   $('settings').toggleAttribute('data-update', ['available', 'ready', 'downloading', 'download-error', 'install-error',
     'permission-required', 'installer-open'].includes(status))
@@ -666,20 +667,24 @@ async function connectHostLink() {
 function drawSync(value) {
   syncState = value
   const mobile = value.role === 'mobile'
+  const phoneHost = api.mobile && value.role === 'host'
   const follower = value.role === 'follower' && value.enabled
   if (follower) followerView = true
   const follow = !mobile && followerView
   $('sync-role-choice').hidden = !api.supportsFollower
-  $('sync-role-host').setAttribute('aria-pressed', String(!follow))
-  $('sync-role-host').disabled = follower
-  $('sync-role-follower').setAttribute('aria-pressed', String(follow))
+  $('sync-role-host').setAttribute('aria-pressed', String(!mobile && !follow))
+  $('sync-role-host').disabled = follower || (mobile && value.enabled)
+  $('sync-role-follower').setAttribute('aria-pressed', String(mobile || follow))
   $('sync-role-follower').disabled = value.role === 'host' && value.enabled
   $('sync-host').hidden = mobile || follow
   $('sync-mobile').hidden = !mobile && !follow
   $('sync-drafts').hidden = !mobile
-  if (!mobile) $('sync-photo-label').textContent = '从二维码图片识别'
-  $('api-settings').hidden = mobile && value.enabled
-  $('mobile-ai-host').hidden = !mobile || !value.enabled
+  $('sync-photo-label').textContent = api.mobile ? '从相册识别' : '从二维码图片识别'
+  $('api-settings').hidden = phoneHost || (mobile && value.enabled)
+  $('api-heading').hidden = phoneHost
+  $('settings-codex').disabled = $('question').disabled = phoneHost
+  $('mobile-ai-host').hidden = !phoneHost && (!mobile || !value.enabled)
+  $('mobile-ai-host').textContent = phoneHost ? '手机作为主设备时，桃桃 AI 不可用。' : '配对电脑后，由电脑处理桃桃 AI 的请求。'
   if (mobile) {
     $('note-locked').textContent = !value.enabled ? '正在同步 · 请先配对主机'
       : value.error ? '正在同步 · 等待主机重新连接' : '正在同步，完成后可编辑便签。'
@@ -687,7 +692,7 @@ function drawSync(value) {
     $('sync-unpair').hidden = !value.enabled
     $('sync-status').textContent = value.error || (value.locked ? '设备同步中，便签只读' : value.enabled
       ? [syncPathLabel(value.via) || '已配对', value.last ? new Date(value.last).toLocaleTimeString() : '等待首次同步'].join(' · ')
-      : '从桌面主机获取配对码或二维码。')
+      : '从主设备获取配对码或二维码。')
     return
   }
   $('note-locked').textContent = follower ? '从设备 · 请在主设备编辑便签' : '正在同步，便签暂时只读。'
@@ -697,7 +702,7 @@ function drawSync(value) {
     $('sync-status').textContent = value.error || (follower
       ? value.syncing ? '正在接收主设备便签…' : ['从设备 · 只读', syncPathLabel(value.via),
           value.last ? new Date(value.last).toLocaleTimeString() : ''].filter(Boolean).join(' · ')
-      : '配对另一台电脑，只读同步它的便签。本机便签和设置单独保留。')
+      : '配对主设备，只读同步它的便签。本机便签和设置单独保留。')
     return
   }
   $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
@@ -709,8 +714,9 @@ function drawSync(value) {
   $('sync-status').textContent = value.enabled
     ? { online: value.fallback && value.onlineRelay === value.fallback
           ? '主机已通过备用服务上线，可以扫码配对。' : '主机已在线，可以扫码配对。',
-        connecting: '正在连接异地同步服务…', offline: '电脑无法连接同步服务，正在重试。' }[value.status]
-    : '将这台电脑设为便签和 AI 的主机。'
+        connecting: '正在连接异地同步服务…', offline: '主设备无法连接同步服务，正在重试。' }[value.status]
+    : phoneHost ? '将这台手机设为便签主设备。同步时请保持应用在前台，桃桃 AI 在此角色下不可用。'
+      : '将这台电脑设为便签和 AI 的主设备。'
 }
 
 async function showPairing() {
@@ -734,7 +740,7 @@ async function syncAction(operation, button) {
   try {
     const value = await operation()
     if (value) drawSync(value)
-    if (!api.mobile) await showPairing()
+    await showPairing()
   } catch (error) {
     $('sync-status').textContent = errorMessage(error)
   } finally {
@@ -747,13 +753,22 @@ $('settings-sync').onclick = () => {
   $('sync-test-status').textContent = ''
   void syncAction(async () => {
     const result = await api.syncState()
-    if (!api.mobile) $('sync-relay-settings').open = !result.relay
+    if (result.role === 'host') $('sync-relay-settings').open = !result.relay
     return result
   })
 }
 $('sync-back').onclick = () => showView('settings')
 for (const [id, follow] of [['sync-role-host', false], ['sync-role-follower', true]]) {
   $(id).onclick = () => {
+    if (api.selectSyncRole) {
+      void syncAction(async () => {
+        await saveBeforeSwitch()
+        const value = await api.selectSyncRole(follow ? 'mobile' : 'host')
+        await connectHostLink()
+        return value
+      }, $(id))
+      return
+    }
     followerView = follow
     $('sync-pair-code').value = $('sync-test-status').textContent = ''
     void syncAction(() => api.syncState())
@@ -903,6 +918,7 @@ function chatMode(notes, work = false) {
   if (notes) codexView.drawer(false)
 }
 function openChat(back) {
+  if (api.mobile && syncState?.role === 'host') return
   chatBack = back
   chatMode(false)
   codexView.drawer(false)
@@ -1114,7 +1130,7 @@ async function init() {
     }
   })
   api.onSync?.(drawSync)
-  if (!api.mobile) void connectHostLink().catch(error => { $('sync-status').textContent = errorMessage(error) })
+  if (api.syncLink) void connectHostLink().catch(error => { $('sync-status').textContent = errorMessage(error) })
   api.onDay(next => {
     followNewDay ||= currentDate === today
     today = next

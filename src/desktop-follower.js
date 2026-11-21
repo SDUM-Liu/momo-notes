@@ -30,6 +30,12 @@ export function desktopFollower(api) {
     },
   })
   const initial = sync.init()
+  api.onUpdateTransfer?.(async ({ id, op, data }) => {
+    let reply
+    try { await initial; reply = { ok: true, value: await sync.update(op, data) } }
+    catch (error) { reply = { ok: false, error: error.message } }
+    await api.updateTransferReply(id, reply)
+  })
   const refresh = () => initial.then(sync.run).catch(() => {})
   void refresh()
   setInterval(refresh, 20000)

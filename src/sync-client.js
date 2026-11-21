@@ -200,5 +200,17 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       if (op === 'notes') await run()
       return request(pair, 'codex/' + op, payload)
     },
+    async update(op, payload) {
+      if (!pair || switching) throw new Error('请连接已配对的主设备后重试')
+      const connection = pair
+      try {
+        const value = await request(connection, 'update/' + op, payload)
+        if (pair !== connection || switching) throw new Error('主设备已切换，请重新检查更新')
+        return value
+      } catch (error) {
+        if (error.message.includes('未知的同步请求')) throw new Error('请先更新主设备的桃桃便签')
+        throw error
+      }
+    },
   }
 }

@@ -52,6 +52,7 @@ jobs:
       - name: Verify Ubuntu desktop pairing and read-only sync
         if: matrix.name == 'Ubuntu-x64'
         run: |
+          node --test tests/host-updates.cjs
           npm ci --prefix relay
           npm install --prefix "$RUNNER_TEMP/momo-test" playwright@1.65.1
           npm run build

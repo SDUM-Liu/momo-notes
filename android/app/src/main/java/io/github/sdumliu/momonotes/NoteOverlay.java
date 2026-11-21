@@ -2,12 +2,16 @@ package io.github.sdumliu.momonotes;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -59,6 +63,7 @@ final class NoteOverlay {
             parent.removeView(editor);
             window.addView(editor, new FrameLayout.LayoutParams(-1, -1));
             addHandle();
+            addResizeHandle();
             windows.addView(window, position);
             setFloating(true);
         } catch (RuntimeException error) {
@@ -91,15 +96,24 @@ final class NoteOverlay {
 
     private void sizeWindow() {
         Rect bounds = PetOverlayService.availableSpace(windows);
-        position.width = Math.max(1, Math.min(dp(400), bounds.width() - dp(16)));
-        position.height = Math.max(1, Math.min(dp(620), bounds.height() * 2 / 3));
+        int width = preferences.getInt("note-width", 0);
+        int height = preferences.getInt("note-height", 0);
+        position.width = boundedSize(width > 0 ? dp(width) : Math.min(dp(400), bounds.width() - dp(16)),
+            dp(260), bounds.width());
+        position.height = boundedSize(height > 0 ? dp(height) : Math.min(dp(620), bounds.height() * 2 / 3),
+            dp(280), bounds.height());
+    }
+
+    private static int boundedSize(int requested, int minimum, int available) {
+        return Math.max(1, Math.min(available, Math.max(minimum, requested)));
     }
 
     private void addHandle() {
         FrameLayout handle = new FrameLayout(context);
         handle.setContentDescription("拖动移动便签");
-        FrameLayout.LayoutParams gripArea = new FrameLayout.LayoutParams(dp(132), dp(20), Gravity.TOP | Gravity.LEFT);
+        FrameLayout.LayoutParams gripArea = new FrameLayout.LayoutParams(-1, dp(22), Gravity.TOP | Gravity.LEFT);
         gripArea.leftMargin = dp(8);
+        gripArea.rightMargin = dp(62);
         View grip = new View(context);
         GradientDrawable fill = new GradientDrawable();
         fill.setColor(Color.rgb(182, 143, 160));
@@ -109,6 +123,60 @@ final class NoteOverlay {
         handle.setOnTouchListener(PetOverlayService.dragWindow(windows, window, position, () ->
             preferences.edit().putInt("note-x", position.x).putInt("note-y", position.y).apply()));
         window.addView(handle, gripArea);
+    }
+
+    private void addResizeHandle() {
+        View handle = new View(context) {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                paint.setColor(Color.rgb(162, 116, 139));
+                paint.setStrokeWidth(dp(2));
+                paint.setStrokeCap(Paint.Cap.ROUND);
+                float right = getWidth() - dp(8), bottom = getHeight() - dp(8);
+                canvas.drawLine(right - dp(12), bottom, right, bottom - dp(12), paint);
+                canvas.drawLine(right - dp(6), bottom, right, bottom - dp(6), paint);
+            }
+        };
+        handle.setContentDescription("拖动调整便签大小");
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            private float downX, downY;
+            private int width, height;
+            private boolean resizing;
+            private final int slop = ViewConfiguration.get(context).getScaledTouchSlop();
+
+            @Override public boolean onTouch(View view, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downX = event.getRawX();
+                        downY = event.getRawY();
+                        width = position.width;
+                        height = position.height;
+                        resizing = false;
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        int dx = Math.round(event.getRawX() - downX), dy = Math.round(event.getRawY() - downY);
+                        resizing |= Math.abs(dx) > slop || Math.abs(dy) > slop;
+                        if (resizing && window.isAttachedToWindow()) {
+                            Rect area = PetOverlayService.availableSpace(windows);
+                            position.width = boundedSize(width + dx, dp(260), area.width() - position.x);
+                            position.height = boundedSize(height + dy, dp(280), area.height() - position.y);
+                            windows.updateViewLayout(window, position);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (resizing) {
+                            float density = context.getResources().getDisplayMetrics().density;
+                            preferences.edit().putInt("note-width", Math.round(position.width / density))
+                                .putInt("note-height", Math.round(position.height / density)).apply();
+                        }
+                        return true;
+                    default: return false;
+                }
+            }
+        });
+        window.addView(handle, new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.BOTTOM | Gravity.RIGHT));
     }
 
     private void setFloating(boolean active) {

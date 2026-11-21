@@ -120,7 +120,7 @@
           后台下载，退出时自动安装<input id="automatic-update" type="checkbox" role="switch">
         </label>
         <button id="installer-settings" type="button" class="quiet desktop-only">下载其他版本</button>
-        <h2>便签问答 API</h2>
+        <h2 id="api-heading">便签问答 API</h2>
         <p id="mobile-ai-host" hidden>配对后，由电脑处理桃桃 AI 的请求。</p>
         <fieldset id="api-settings" class="settings-group fields">
           <label>API 地址<input id="base-url" placeholder="https://服务地址/v1" maxlength="500"></label>
@@ -157,7 +157,7 @@
     <section id="sync-view" class="view sub-view" hidden>
       <div class="subhead"><h1>设备同步</h1><button id="sync-back" class="quiet">返回设置</button></div>
       <div class="sync-body">
-        <div id="sync-role-choice" class="sync-role desktop-only" hidden aria-label="这台电脑的同步角色">
+        <div id="sync-role-choice" class="sync-role" hidden aria-label="本机同步角色">
           <button id="sync-role-host" type="button" class="quiet" aria-pressed="true">主设备</button>
           <button id="sync-role-follower" type="button" class="quiet" aria-pressed="false">从设备</button>
         </div>
@@ -173,7 +173,7 @@
             <img id="sync-qr" alt="同步配对二维码" hidden>
             <label>配对码<input id="sync-code" readonly></label>
             <button id="sync-rotate" class="quiet">更换配对码</button>
-            <p>手机扫码后会自动尝试直连。直连不可用时，应用将通过同步服务转发密文。</p>
+            <p>其他设备配对后会自动尝试直连。直连不可用时，应用将通过同步服务转发密文。</p>
           </div>
         </div>
         <form id="sync-mobile" hidden>

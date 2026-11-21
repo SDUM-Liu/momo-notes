@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('momo', {
   onState: listen('app:state-changed'),
   onDay: listen('notes:day-changed'),
   onUpdate: listen('updates:changed'),
+  onUpdateTransfer: listen('updates:transfer'),
+  updateTransferReply: invoke('updates:transfer-reply'),
   checkUpdate: invoke('updates:check'),
   downloadUpdate: invoke('updates:download'),
   installUpdate: invoke('updates:install'),

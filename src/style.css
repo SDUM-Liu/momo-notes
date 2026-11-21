@@ -372,6 +372,7 @@ html[data-momo-floating="true"] body[data-platform="mobile"][data-mode="note"] .
 }
 body[data-platform="mobile"] .top { padding-right: 12px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .top { padding-right: 53px; }
+html[data-momo-floating="true"] body[data-platform="mobile"] .foot { padding-right: 35px; }
 body[data-platform="mobile"] :is(input, select, textarea, .tiptap) { font-size: 16px; }
 body[data-platform="mobile"] .link-form { top: 133px; }
 body[data-platform="mobile"] :is(.chat-head .quiet, .chat-send) { min-height: 42px; min-width: 42px; }

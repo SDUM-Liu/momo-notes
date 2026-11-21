@@ -7,6 +7,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.provider.Settings;
+import android.util.Base64;
 import android.util.Log;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.JSObject;
@@ -39,6 +40,9 @@ public class MomoUpdatesPlugin extends Plugin {
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(12, TimeUnit.MINUTES).followSslRedirects(false).build();
     private final AtomicBoolean downloading = new AtomicBoolean();
+    private String relayVersion, relaySha;
+    private int relaySize, relayBytes;
+    private MessageDigest relayDigest;
 
     private SharedPreferences preferences() {
         return getContext().getSharedPreferences("momo-updates", android.content.Context.MODE_PRIVATE);
@@ -46,6 +50,7 @@ public class MomoUpdatesPlugin extends Plugin {
 
     private File directory() { return new File(getContext().getCacheDir(), "updates"); }
     private File archive(String version) { return new File(directory(), "update-" + version + ".apk"); }
+    private File partial() { return new File(directory(), "update.part.apk"); }
 
     private static long versionCode(String version) {
         if (!version.matches("[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}")) return -1;
@@ -103,7 +108,7 @@ public class MomoUpdatesPlugin extends Plugin {
 
             @Override
             public void onResponse(Call request, Response response) {
-                File partial = new File(directory(), "update.part.apk");
+                File partial = partial();
                 try (Response closed = response) {
                     if (!response.isSuccessful() || response.body() == null) throw new IOException("下载安装包失败");
                     if (!directory().isDirectory() && !directory().mkdirs()) throw new IOException("无法创建更新缓存");
@@ -124,15 +129,7 @@ public class MomoUpdatesPlugin extends Plugin {
                             }
                         }
                     }
-                    String actual = String.format(Locale.ROOT, "%064x", new BigInteger(1, digest.digest()));
-                    if (received != size || !sha256.equals(actual)) throw new IOException("安装包校验失败，请重新检查更新");
-                    verifyArchive(partial, version);
-                    if (!partial.renameTo(archive(version))) throw new IOException("无法保存更新安装包");
-                    String previous = preferences().getString("version", "");
-                    if (!preferences().edit().putString("version", version).putLong("size", size).remove("open").commit()) {
-                        throw new IOException("无法保存更新记录");
-                    }
-                    if (!version.equals(previous) && versionCode(previous) >= 0) archive(previous).delete();
+                    saveArchive(version, size, sha256, received, digest);
                     call.resolve(state("ready", version));
                 } catch (Exception error) {
                     Log.w("MomoUpdates", "Download or package verification failed", error);
@@ -143,6 +140,85 @@ public class MomoUpdatesPlugin extends Plugin {
                 }
             }
         });
+    }
+
+    @PluginMethod
+    public synchronized void beginRelay(PluginCall call) {
+        String version = call.getString("version", "");
+        String sha256 = call.getString("sha256", "");
+        int size = call.getInt("size", 0);
+        boolean started = false;
+        try {
+            if (versionCode(version) <= installed().getLongVersionCode() || !sha256.matches("[a-f0-9]{64}")
+                    || size <= 0 || size > MAX_BYTES) throw new IOException("没有可验证的新版本安装包");
+            if (!downloading.compareAndSet(false, true)) throw new IOException("正在下载更新");
+            started = true;
+            if (!directory().isDirectory() && !directory().mkdirs()) throw new IOException("无法创建更新缓存");
+            try (FileOutputStream empty = new FileOutputStream(partial())) {}
+            relayDigest = MessageDigest.getInstance("SHA-256");
+            relayVersion = version;
+            relaySha = sha256;
+            relaySize = size;
+            relayBytes = 0;
+            call.resolve();
+        } catch (Exception error) {
+            if (started) clearRelay();
+            call.reject(error.getMessage(), error);
+        }
+    }
+
+    @PluginMethod
+    public synchronized void appendRelay(PluginCall call) {
+        if (relayDigest == null) { call.reject("主设备下载尚未开始"); return; }
+        try {
+            String data = call.getString("data", "");
+            if (data.length() > 700_000) throw new IOException("安装包分段超出大小限制");
+            byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+            int expected = Math.min(512 * 1024, relaySize - relayBytes);
+            if (expected <= 0 || bytes.length != expected) throw new IOException("主设备返回的安装包分段大小有误");
+            try (FileOutputStream output = new FileOutputStream(partial(), true)) { output.write(bytes); }
+            relayDigest.update(bytes);
+            relayBytes += bytes.length;
+            call.resolve(state("downloading", relayVersion).put("progress", (int) (100L * relayBytes / relaySize)));
+        } catch (Exception error) {
+            clearRelay();
+            call.reject(error.getMessage(), error);
+        }
+    }
+
+    @PluginMethod
+    public synchronized void finishRelay(PluginCall call) {
+        if (relayDigest == null) { call.reject("主设备下载尚未开始"); return; }
+        try {
+            saveArchive(relayVersion, relaySize, relaySha, relayBytes, relayDigest);
+            call.resolve(state("ready", relayVersion));
+        } catch (Exception error) {
+            call.reject(error.getMessage(), error);
+        } finally { clearRelay(); }
+    }
+
+    @PluginMethod
+    public synchronized void cancelRelay(PluginCall call) {
+        if (relayDigest != null) clearRelay();
+        call.resolve();
+    }
+
+    private void clearRelay() {
+        relayDigest = null;
+        partial().delete();
+        downloading.set(false);
+    }
+
+    private void saveArchive(String version, long size, String sha256, long received, MessageDigest digest) throws Exception {
+        String actual = String.format(Locale.ROOT, "%064x", new BigInteger(1, digest.digest()));
+        if (received != size || !sha256.equals(actual)) throw new IOException("安装包校验失败，请重新检查更新");
+        verifyArchive(partial(), version);
+        if (!partial().renameTo(archive(version))) throw new IOException("无法保存更新安装包");
+        String previous = preferences().getString("version", "");
+        if (!preferences().edit().putString("version", version).putLong("size", size).remove("open").commit()) {
+            throw new IOException("无法保存更新记录");
+        }
+        if (!version.equals(previous) && versionCode(previous) >= 0) archive(previous).delete();
     }
 
     private void verifyArchive(File file, String version) throws Exception {

@@ -87,6 +87,19 @@ def check_status_bar():
     assert top >= bottom, f'The note toolbar starts at {top}, within the Android status bar ending at {bottom}'
 
 
+def open_floating_note():
+    shell('input', 'keyevent', 'KEYCODE_HOME')
+    overlays = wait_for(windows, lambda items: len(items) == 1 and 'NOT_FOCUSABLE' in items[0],
+                        'Pet did not become a real overlay after returning home')
+    left, top, right, bottom = frame_of(overlays[0])
+    shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
+    wait_for(windows, floating_note, 'Tapping the pet did not open a focusable system overlay')
+
+
+def floating_note(items):
+    return len(items) == 1 and 'NOT_FOCUSABLE' not in items[0]
+
+
 def main(apk):
     shell('wm', 'size', '1080x2160')
     shell('wm', 'density', '420')
@@ -106,28 +119,33 @@ def main(apk):
     wait_for(lambda: shell('dumpsys', 'activity', 'services', PACKAGE),
              lambda text: '.PetOverlayService' in text and 'isForeground=true' in text,
              'The pet service did not start after returning to the editor')
-    shell('input', 'keyevent', 'KEYCODE_HOME')
-    overlays = wait_for(windows, lambda items: len(items) == 1, 'Pet did not become a real overlay after granting permission')
-    left, top, right, bottom = frame_of(overlays[0])
-    shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
-    focusable = lambda items: len(items) == 1 and 'NOT_FOCUSABLE' not in items[0]
-    wait_for(windows, focusable, 'Tapping the pet did not open a focusable system overlay')
-    # At the fixed test density the handle's painted grip is 194 px from the left edge.
+    open_floating_note()
     for _ in range(3):
         time.sleep(1)
-        note = wait_for(windows, focusable, 'The floating note closed before being dragged')
+        note = wait_for(windows, floating_note, 'The floating note closed before being dragged')
         left, top, _, _ = frame_of(note[0])
         shell('input', 'swipe', str(left + 194), str(top + 26), str(left + 194), str(top + 166), '600')
         moved = windows()
-        if focusable(moved) and frame_of(moved[0])[1] > top:
+        if floating_note(moved) and frame_of(moved[0])[1] > top:
             break
     else:
         raise AssertionError('Dragging the note did not move the system window')
+    left, top, right, bottom = frame_of(moved[0])
+    shell('input', 'swipe', str(right - 24), str(bottom - 24), str(right - 105), str(bottom - 135), '650')
+    resized = wait_for(windows, lambda items: floating_note(items) and frame_of(items[0])[2] < right - 30
+                        and frame_of(items[0])[3] < bottom - 30, 'Dragging the corner did not resize the system window')
+    saved_frame = frame_of(resized[0])
+    assert saved_frame[:2] == (left, top), 'Resizing moved the upper left corner'
+    open_launcher_entry()
+    wait_for(windows, lambda items: not items, 'A launcher entry kept the note in a floating window')
+    open_floating_note()
+    restored = frame_of(wait_for(windows, floating_note, 'The resized floating note did not reopen')[0])
+    assert all(abs(actual - saved) <= 3 for actual, saved in zip(restored, saved_frame)), (restored, saved_frame)
     open_launcher_entry()
     wait_for(windows, lambda items: not items, 'A launcher entry kept the note in a floating window')
     check_status_bar()
     print('PASS Android status bar stays visible and above the note toolbar on launch and after closing the overlay')
-    print('PASS the app icon opens the editor, permission return starts the pet, and the pet opens a movable overlay')
+    print('PASS the pet opens a movable, resizable system overlay and both changes survive reopening')
 
 
 if __name__ == '__main__':
