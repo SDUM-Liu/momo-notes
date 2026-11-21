@@ -89,10 +89,17 @@ def check_status_bar():
 
 def open_floating_note():
     shell('input', 'keyevent', 'KEYCODE_HOME')
-    overlays = wait_for(windows, lambda items: len(items) == 1 and 'NOT_FOCUSABLE' in items[0],
-                        'Pet did not become a real overlay after returning home')
-    left, top, right, bottom = frame_of(overlays[0])
-    shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
+    wait_for(lambda: resumed(PACKAGE), lambda active: not active, 'The launcher did not take focus')
+    for _ in range(3):
+        overlays = wait_for(windows, lambda items: len(items) == 1,
+                            'Pet did not become a real overlay after returning home')
+        if floating_note(overlays):
+            return
+        # The surface can be present during the home transition before it receives touch events.
+        time.sleep(1.5)
+        left, top, right, bottom = frame_of(overlays[0])
+        shell('input', 'tap', str((left + right) // 2), str((top + bottom) // 2))
+        time.sleep(1.5)
     wait_for(windows, floating_note, 'Tapping the pet did not open a focusable system overlay')
 
 
