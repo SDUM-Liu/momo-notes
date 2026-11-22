@@ -1,4 +1,5 @@
 import { hostSyncLink, mobileSyncLink } from './rtc-sync.js'
+import { blockCount } from '../shared/media-transfer.mjs'
 import { seal, unseal, parsePairing, transferId } from '../shared/sync.mjs'
 export function wireHandoff(api, flush, refreshHost) {
   if (!api.handoff) return
@@ -33,13 +34,26 @@ export function wireHandoff(api, flush, refreshHost) {
       if (!resume) {
         await flush()
         const hello = await request('hello')
-        const info = await api.handoff('prepare', code, hello.proof)
+        const info = await api.handoff('prepare', code, hello.proof, hello.mediaVersion)
         checksum = info.checksum
         for (let index = 0; index < info.count; index++) {
           status('正在传输 ' + (index + 1) + ' / ' + info.count)
           await request('chunk', { index, checksum, chunk: await api.handoff('chunk', index) })
         }
-        if ((await request('stage', { checksum })).staged !== checksum) throw new Error('目标设备校验失败')
+        let staged = await request('stage', { checksum })
+        if (info.media?.length) {
+          if (!staged.waitingForMedia) throw new Error('接收设备未准备好接收附件')
+          for (const [f, file] of info.media.entries()) {
+            const total = blockCount(file)
+            for (let index = 0; index < total; index++) {
+              status('正在传输附件 ' + (f + 1) + ' / ' + info.media.length + '（' + (index + 1) + ' / ' + total + '）')
+              const bytes = await api.handoff('mediaChunk', f, index)
+              await request('mediaChunk', { checksum, fileId: file.id, index, bytes })
+            }
+          }
+          staged = await request('mediaFinish', { checksum })
+        }
+        if (staged.staged !== checksum) throw new Error('目标设备校验失败')
         await flush()
         await api.handoff('cutover', code, checksum)
         await refreshHost()

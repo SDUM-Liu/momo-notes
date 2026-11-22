@@ -30,6 +30,10 @@ public class MomoSyncPlugin extends Plugin {
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build();
 
+    private java.io.OutputStream backupStream;
+    private android.net.Uri backupUri;
+    private String backupToken;
+
     @PluginMethod
     public void wifiAddress(PluginCall call) {
         ConnectivityManager manager = getContext().getSystemService(ConnectivityManager.class);
@@ -64,25 +68,60 @@ public class MomoSyncPlugin extends Plugin {
     }
 
     @com.getcapacitor.annotation.ActivityCallback
-    private void backupDestination(PluginCall call, androidx.activity.result.ActivityResult result) {
+    private synchronized void backupDestination(PluginCall call, androidx.activity.result.ActivityResult result) {
         if (call == null) return;
         android.content.Intent data = result.getData();
         if (result.getResultCode() != android.app.Activity.RESULT_OK || data == null || data.getData() == null) {
             call.reject("保存已取消");
             return;
         }
-        android.net.Uri destination = data.getData();
-        getBridge().execute(() -> {
-            try (java.io.OutputStream output = getContext().getContentResolver().openOutputStream(destination, "wt")) {
-                String value = call.getString("backup");
-                if (output == null || value == null) throw new IOException();
-                output.write(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            } catch (Exception error) {
-                call.reject("迁移包写入失败");
-                return;
-            }
+        if (backupStream != null) { call.reject("已有备份正在写入"); return; }
+        try {
+            backupUri = data.getData();
+            backupStream = getContext().getContentResolver().openOutputStream(backupUri, "wt");
+            if (backupStream == null) throw new IOException();
+            backupToken = java.util.UUID.randomUUID().toString();
+            JSObject answer = new JSObject();
+            answer.put("token", backupToken);
+            call.resolve(answer);
+        } catch (Exception error) { call.reject("无法创建迁移包"); }
+    }
+
+    @PluginMethod
+    public synchronized void appendBackup(PluginCall call) {
+        if (backupToken == null || !backupToken.equals(call.getString("token"))) { call.reject("备份已结束"); return; }
+        String encoded = call.getString("part");
+        if (encoded == null || encoded.length() > 400000) { call.reject("无效的备份数据块"); return; }
+        try {
+            backupStream.write(android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP));
             call.resolve();
-        });
+        } catch (Exception error) { call.reject("备份写入失败，请检查可用空间"); }
+    }
+
+    private void finishBackup(boolean abort) throws IOException {
+        try {
+            if (backupStream != null) backupStream.close();
+        } catch (IOException error) { abort = true; throw error; }
+        finally {
+            if (abort && backupUri != null) {
+                try { android.provider.DocumentsContract.deleteDocument(getContext().getContentResolver(), backupUri); }
+                catch (Exception ignored) { }
+            }
+            backupToken = null; backupStream = null; backupUri = null;
+        }
+    }
+
+    @PluginMethod
+    public synchronized void closeBackup(PluginCall call) {
+        if (backupToken == null || !backupToken.equals(call.getString("token"))) { call.reject("备份已结束"); return; }
+        try { finishBackup(call.getBoolean("abort", false)); call.resolve(); }
+        catch (Exception error) { call.reject("迁移包保存失败"); }
+    }
+
+    @Override
+    protected synchronized void handleOnDestroy() {
+        try { finishBackup(true); } catch (IOException ignored) { }
+        super.handleOnDestroy();
     }
 
     @PluginMethod

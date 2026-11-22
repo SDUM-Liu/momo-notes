@@ -9,7 +9,7 @@ const listen = channel => callback => {
 
 contextBridge.exposeInMainWorld('momo', {
   handoff: (op, ...args) => {
-    if (!['target', 'ready', 'prepare', 'receive', 'chunk', 'cutover', 'pending', 'finish'].includes(op)) throw new Error('无效的迁移操作')
+    if (!['target', 'ready', 'prepare', 'receive', 'chunk', 'mediaChunk', 'cutover', 'pending', 'finish'].includes(op)) throw new Error('无效的迁移操作')
     return ipcRenderer.invoke('handoff:' + op, ...args)
   },
   deviceSSHProfile: invoke('device:ssh-profile'),

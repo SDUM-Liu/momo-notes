@@ -25,7 +25,7 @@ test('six-digit authenticator codes, clock mismatch and replay', () => {
   assert.equal(verify(seed,'２８７ ０８２',-1,59000),1)
 })
 
-test('protected book, authenticated backup and interrupted desktop handoff', () => {
+test('protected book, authenticated backup and interrupted desktop handoff', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-migration-'))
   try {
     const a = path.join(root, 'a'), b = path.join(root, 'b')
@@ -57,25 +57,25 @@ test('protected book, authenticated backup and interrupted desktop handoff', () 
     const receiver = () => handoff({ root: b, directory: migration.activePath(b), sync: {}, follower: { code: pair }, credentials: {}, check() {}, restart() {} })
     let dest = receiver(), source = sender()
     const link = dest.ready()
-    const rpc = (op, data = {}) => {
+    const rpc = async (op, data = {}) => {
       const id = transferId()
-      const result = unseal(link.key, 'handoff/' + id, dest.receive(seal(link.key, 'handoff', { id, op, ...data })))
+      const result = unseal(link.key, 'handoff/' + id, await dest.receive(seal(link.key, 'handoff', { id, op, ...data })))
       assert(!result.error, result.error); return result.value
     }
-    assert.throws(() => source.prepare(link.code, 'wrong'), /尚未绑定/)
-    const { checksum, count } = source.prepare(link.code, rpc('hello').proof)
+    await assert.rejects(() => source.prepare(link.code, 'wrong'), /尚未绑定/)
+    const { checksum, count } = await source.prepare(link.code, (await rpc('hello')).proof)
     assert(count > 1)
-    for (let index = 0; index < count; index++) rpc('chunk', { checksum, index, chunk: source.chunk(index) })
-    assert.equal(rpc('stage', { checksum }).staged, checksum)
+    for (let index = 0; index < count; index++) await rpc('chunk', { checksum, index, chunk: source.chunk(index) })
+    assert.equal((await rpc('stage', { checksum })).staged, checksum)
     assert.equal(migration.activePath(b), b)
     source.cutover(link.code, checksum)
     assert.equal(sync.state().enabled, false); assert.equal(follower.code, pair)
     assert.equal(sync.owns(require('../shared/sync.mjs').parsePairing(pair).key), false)
     source = sender(); dest = receiver()
     assert.equal(source.pending().checksum, checksum)
-    assert(rpc('activate', { checksum }).done)
+    assert((await rpc('activate', { checksum })).done)
     dest = receiver()
-    assert(rpc('activate', { checksum }).done)
+    assert((await rpc('activate', { checksum })).done)
     const promoted = migration.activePath(b)
     assert.deepEqual(openStore(promoted).data.notes, store.data.notes)
     assert.equal(fs.readFileSync(path.join(promoted, 'private-book.enc'), 'utf8'), encrypted)

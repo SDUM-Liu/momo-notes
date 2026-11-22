@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, session, dialog, nativeImage, safeStorage, powerMonitor, shell } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, session, protocol, dialog, nativeImage, safeStorage, powerMonitor, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
@@ -19,6 +19,7 @@ const { createFollower } = require('./follower.cjs')
 const { createCodex } = require('./codex.cjs')
 const { appServer } = require('./codex-rpc.cjs')
 
+protocol.registerSchemesAsPrivileged([{ scheme: 'momo-media', privileges: { standard: true, secure: true, stream: true } }])
 app.setName('Momo Notes')
 if (process.platform === 'win32') app.setAppUserModelId('io.github.sdumliu.momo-notes')
 if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('ozone-platform', 'x11')
@@ -199,7 +200,7 @@ function registerIPC() {
     } else if (op === 'lock' || op === 'begin') restoreBrowser()
     return result
   })
-  for (const op of ['target', 'ready', 'prepare', 'receive', 'chunk', 'cutover', 'pending', 'finish'])
+  for (const op of ['target', 'ready', 'prepare', 'receive', 'chunk', 'mediaChunk', 'cutover', 'pending', 'finish'])
     handle('handoff:' + op, (...args) => transfer[op](...args))
   handle('migration:file', async (direction, password) => {
     if (book.unlocked || codex.busy() || asking) throw new Error('请先锁定私密便签并结束 AI 任务')
@@ -208,10 +209,14 @@ function registerIPC() {
       if (follower.store) throw new Error('请在主设备导出')
       const result = await dialog.showSaveDialog(win, { defaultPath: '桃桃便签.momobackup', filters: [{ name: '桃桃迁移包', extensions: ['momobackup'] }] })
       if (result.canceled) return false
-      const data = migration.pack(migration.snapshot(profileDirectory, store, safeStorage), password)
       const tmp = result.filePath + '.' + require('node:crypto').randomUUID() + '.tmp'
-      try { fs.writeFileSync(tmp, data, { mode: 0o600, flag: 'wx' }); fs.renameSync(tmp, result.filePath) }
-      finally { fs.rmSync(tmp, { force: true }) }
+      const { backupBytes } = require('../shared/media-transfer.mjs')
+      const source = require('./disk-media.cjs').diskMedia(profileDirectory)
+      const bytes = backupBytes(migration.snapshot(profileDirectory, store, safeStorage), source, data => migration.pack(data, password))
+      try {
+        await require('node:stream/promises').pipeline(bytes, fs.createWriteStream(tmp, { mode: 0o600, flags: 'wx' }))
+        fs.renameSync(tmp, result.filePath)
+      } finally { fs.rmSync(tmp, { force: true }) }
       return true
     }
     if (direction !== 'import') throw new Error('未知迁移操作')
@@ -219,10 +224,25 @@ function registerIPC() {
     const result = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: '桃桃迁移包', extensions: ['momobackup'] }] })
     if (result.canceled) return false
     const source = result.filePaths[0]
-    if (fs.statSync(source).size > 512 * 1024 * 1024) throw new Error('迁移包超过 512 MB')
-    const data = migration.unpack(fs.readFileSync(source, 'utf8'), password)
     const root = app.getPath('userData')
-    migration.activate(root, migration.stage(root, data, safeStorage))
+    const { restoreBackup } = require('../shared/media-transfer.mjs')
+    const file = await fs.promises.open(source, 'r')
+    try {
+      const read = async (offset, count) => {
+        const buffer = Buffer.allocUnsafe(count)
+        let total = 0
+        while (total < count) {
+          const { bytesRead } = await file.read(buffer, total, count - total, offset + total)
+          if (!bytesRead) break
+          total += bytesRead
+        }
+        return buffer.subarray(0, total)
+      }
+      const id = await restoreBackup((await file.stat()).size, read, box => migration.unpack(box, password),
+        data => migration.stage(root, data, safeStorage), id => require('./disk-media.cjs').diskMedia(path.join(root, id)),
+        id => migration.discard(root, id))
+      migration.activate(root, id)
+    } finally { await file.close() }
     app.relaunch(); app.quit()
     return true
   })
@@ -287,6 +307,9 @@ function registerIPC() {
   handle('follower:set', value => {
     if (value) {
       if (sync.state().enabled) throw new Error('请先停止本机的主设备同步')
+      if (!follower.store && require('./disk-media.cjs').diskMedia(profileDirectory).list().length) {
+        throw new Error('本机有多媒体附件，请先迁移至新主设备，或在多媒体中删除后再配对')
+      }
       if (sync.owns(parsePairing(value).key)) throw new Error('不能配对本机的主设备配对码')
     }
     follower.setPair(value)
@@ -442,6 +465,8 @@ function start() {
   store = openStore(profileDirectory)
   sshDevices = deviceProfiles(profileDirectory)
   book = require('./private-book.cjs').privateBook(profileDirectory)
+  session.defaultSession.protocol.handle('momo-media', request => mode === 'note' && !follower?.store
+    ? book.mediaResponse(request) : new Response(null, { status: 404 }))
   const lockBook = () => { book.lock(); restoreBrowser(); win?.webContents.send('private:locked') }
   powerMonitor.on('lock-screen', lockBook)
   powerMonitor.on('suspend', lockBook)
@@ -495,6 +520,7 @@ function start() {
   }, change => {
     if (quitting || win.isDestroyed()) return
     if (change.profileChanged) {
+      lockBook()
       today = follower.store ? localDay() : store.today()
       updates.source(follower.snapshot()?.id)
     }

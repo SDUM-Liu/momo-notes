@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' data: blob:; img-src 'self' data: blob:; connect-src wss: ws://localhost:* ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' data: blob: momo-media:; img-src 'self' data: blob: momo-media:; connect-src wss: ws://localhost:* ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>桃桃便签</title>
 </head>
 <body>
@@ -397,6 +397,14 @@
       </details>
       <p id="ssh-result" role="status"></p>
       <footer class="ssh-actions"><button id="ssh-save" type="button" class="quiet">仅保存</button><button id="ssh-connect" type="submit" class="primary">保存并连接</button></footer>
+    </form>
+  </dialog>
+  <dialog id="drive-import" class="chat-dialog" aria-labelledby="drive-import-title" aria-describedby="drive-import-detail">
+    <h3 id="drive-import-title">保存到私密多媒体？</h3>
+    <p id="drive-import-detail"></p>
+    <form method="dialog" class="drive-import-actions">
+      <button class="quiet" value="cancel" autofocus>取消</button>
+      <button class="primary" value="upload">上传到多媒体</button>
     </form>
   </dialog>
   <dialog id="book-dialog" class="chat-dialog">

@@ -1,4 +1,4 @@
-import { wirePrivateDrive } from './private-drive.js'
+import { privateMediaType, wirePrivateDrive } from './private-drive.js'
 import { privatePages } from './private-pages.js'
 import { Editor, Node } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
@@ -61,6 +61,7 @@ for (const direction of ['export', 'import']) {
               const url = URL.createObjectURL(result), a = document.createElement('a')
               a.href = url; a.download = result.name; a.click(); setTimeout(() => URL.revokeObjectURL(url),60000)
             }
+            await api.releaseBackup?.(result)
             save.hidden = true; save.onclick = null
           } catch (error) { $('settings-status').textContent = errorMessage(error) }
         }
@@ -112,6 +113,12 @@ const noteMedia = Node.create({
 function showDrive(store) {
   if (!drive) {
     drive = wirePrivateDrive($('private-drive'), {
+      async media(op, args) {
+        if (store !== privateStore && !['mediaRelease','mediaAbort','mediaRemove'].includes(op)) throw new Error('已锁定')
+        const result = await api.privateBook(op, args)
+        if (op === 'mediaWrite' && store === privateStore) armPrivateLock()
+        return result
+      },
       save(files) {
         if (store !== privateStore) throw new Error('已锁定')
         const write = store.saveFiles(files)
@@ -137,6 +144,8 @@ function closeDrive() {
 function resetPageContext() {
   ++pageRequest; ++editGeneration
   closeDrive()
+  if ($('drive-import').open) $('drive-import').close('cancel')
+  $('drive-import-detail').textContent = ''
   privateArchive = false
   finishPicker()
   composingEdit = followNewDay = retryOnUnlock = previousSaveError = false
@@ -156,7 +165,7 @@ function syncBookControls() {
   $('return-today').textContent = active ? '返回主页' : '回到今天'
   $('note-title').textContent = active ? '私密便签' : '桃桃便签'
   $('settings-codex').disabled = $('question').disabled = active || Boolean(state.mobileHost)
-  $('image-input').accept = active ? photoTypes + ',audio/*,video/*' : photoTypes
+  $('image-input').accept = active ? 'image/*,audio/*,video/*' : photoTypes
   const label = active ? '插入图片、视频或录音' : '插入图片'
   $('insert-image').title = label
   $('insert-image').setAttribute('aria-label', label)
@@ -706,21 +715,43 @@ async function insertImages(files, position) {
   const store = noteStore()
   const date = currentDate
   const selected = category
+  const onPage = () => store === noteStore() && !readOnly && date === currentDate && selected === category
+  const toDrive = []
   for (const file of files) {
+    if (!onPage()) return
     try {
-      const media = privateStore && /^(?:audio|video)\//.test(file.type)
-      if (!media && !/^image\/(png|jpeg|webp|gif|bmp)$/.test(file.type)) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片')
-      if (file.size > (media ? 32 : 8) * 1024 * 1024) throw new Error(media ? '请选择 32 MB 以内的媒体文件' : '请选择 8 MB 以内的图片')
-      const src = await fileData(file)
-      if (store !== noteStore() || readOnly || date !== currentDate || selected !== category) return
+      const mime = privateStore ? privateMediaType(file) : file.type
+      const media = privateStore && /^(audio|video)\//.test(mime)
+      const imageType = /^image\/(png|jpeg|webp|gif|bmp)$/.test(mime)
+      if (privateStore && ((!imageType && !media) || file.size > (media ? 32 : 8) * 1024 * 1024)) {
+        toDrive.push(file)
+        continue
+      }
+      if (!media && !imageType) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片')
+      if (!privateStore && file.size > 8 * 1024 * 1024) throw new Error('请选择 8 MB 以内的图片')
+      const src = await fileData(mime === file.type ? file : file.slice(0, file.size, mime))
+      if (!onPage()) return
       const image = { type: media ? 'noteMedia' : 'image', attrs: { src, alt: file.name } }
       if (position !== undefined) editor.chain().focus().insertContentAt(position, image).run()
       else editor.chain().focus().insertContent(image).run()
       position = undefined
     } catch (error) {
-      noteStatus(errorMessage(error), true)
+      if (onPage()) noteStatus(errorMessage(error), true)
     }
   }
+  if (!toDrive.length || !onPage()) return
+  const prompt = $('drive-import')
+  if (prompt.open) return
+  const subject = toDrive.length === 1 ? '「' + toDrive[0].name + '」' : '所选的 ' + toDrive.length + ' 个附件'
+  $('drive-import-detail').textContent = subject + '可保存为独立文件。上传后，请在「多媒体」选项卡中预览。'
+  prompt.returnValue = ''
+  const decision = new Promise(resolve => prompt.addEventListener('close', () => resolve(prompt.returnValue), { once: true }))
+  prompt.showModal()
+  const choice = await decision
+  $('drive-import-detail').textContent = ''
+  if (choice !== 'upload' || !onPage() || store !== privateStore) return
+  await loadNote(undefined, 'finds')
+  if (store === privateStore && category === 'finds') drive?.add(toDrive)
 }
 
 $('insert-image').onmousedown = event => event.preventDefault()

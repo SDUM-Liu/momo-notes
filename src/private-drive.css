@@ -288,3 +288,33 @@
 .drive-preview-foot .drive-detail {
   margin-inline-end: auto;
 }
+
+.drive-operation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.drive-operation .drive-status {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drive-operation .drive-text-button {
+  flex: none;
+  margin-inline-end: 7px;
+}
+
+#drive-import-detail {
+  overflow-wrap: anywhere;
+}
+
+.drive-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -61,4 +61,8 @@ function activate(root, id) {
   fs.writeFileSync(file + '.tmp', JSON.stringify({ id }), { mode: 0o600 })
   fs.renameSync(file + '.tmp', file)
 }
-module.exports = { activePath, snapshot, pack, unpack, stage, activate }
+function discard(root, id) {
+  if (!/^profile-[a-f0-9-]{36}$/.test(id) || activePath(root) === path.join(root, id)) throw new Error('暂存资料目录有误')
+  fs.rmSync(path.join(root, id), { recursive: true, force: true })
+}
+module.exports = { discard, activePath, snapshot, pack, unpack, stage, activate }

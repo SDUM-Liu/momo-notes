@@ -8,6 +8,9 @@ import { codexSetupUrl, webUrl } from '../shared/links.mjs'
 import { mobileHandoff } from './mobile-handoff.js'
 import { keyFor, box, openBox } from './mobile-sealed.js'
 import { mobileBook } from './mobile-book.js'
+import { backupBytes, restoreBackup, base64Block } from '../shared/media-transfer.mjs'
+import { spoolBackup, releaseBackup } from './backup-file.js'
+import { mobileMedia } from './mobile-media.js'
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
 import { mobileUpdates } from './mobile-updates.js'
@@ -79,7 +82,9 @@ export function createMobileBridge() {
   let privateLockListener = noop, ordinaryBrowser, privateWebPage = false
   const bookOperation = mobileBook(
     async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
-    async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')), () => hostSelected && !transferringRole && document.documentElement.dataset.momoFloating !== 'true')
+    async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')),
+    () => hostSelected && !changingRole && !transferringRole && document.documentElement.dataset.momoFloating !== 'true',
+    () => mobileMedia(primaryPrefix))
   async function privateBook(op, args) {
     if (op === 'background' && privatePickerActive()) return
     const result = await bookOperation(op, args)
@@ -98,6 +103,10 @@ export function createMobileBridge() {
     }
     return result
   }
+  window.addEventListener('momo-floating-open', () => {
+    privatePickerUntil = 0
+    void privateBook('background')
+  })
   const syncStatus = () => hostSelected ? host.state() : sync.state()
 
   function queueWrite(operation) {
@@ -362,10 +371,27 @@ export function createMobileBridge() {
     await dbPut('primary-role',false)
     hostSelected = false
   }
+  const mediaFor = (prefix = primaryPrefix) => mobileMedia(prefix)
+  async function discardStage(prefix) {
+    if (!/^primary-[0-9a-f]{32}\/$/.test(prefix) || prefix === primaryPrefix) throw new Error('暂存资料路径无效')
+    await mediaFor(prefix).clear()
+    const db = await ready
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(['notes', 'settings'], 'readwrite')
+      const keys = IDBKeyRange.bound(prefix, prefix + '\uffff')
+      tx.objectStore('notes').delete(keys); tx.objectStore('settings').delete(keys)
+      tx.oncomplete = resolve; tx.onabort = () => reject(tx.error)
+    })
+    await secure.set('staged-' + prefix.slice(0,-1), null)
+  }
   const handoff = mobileHandoff({ get:dbGet,put:dbPut,secure,pair:async () => {
     if (hostSelected) throw new Error('请在已绑定的从设备上接收')
     return SecureStorage.getItem('sync-pair')
-  },snapshot:portableSnapshot,stage:stageProfile,activate:async prefix => {
+  },snapshot:portableSnapshot,stage:stageProfile, mediaFor, discard:discardStage,
+    retireMedia:async () => {
+      await mediaFor().clear()
+      await dbPut(primaryPrefix + 'private-book', null)
+    },activate:async prefix => {
     await applyPromotion(prefix); setTimeout(() => location.reload(),1200)
   },demote,current:() => {
     if (!hostSelected || host.state().locked) throw new Error('请在同步结束后移交主设备')
@@ -382,6 +408,7 @@ export function createMobileBridge() {
     primaryPrefix = await dbGet('primary-prefix') || ''
     settings = { ...settings, ...await transaction(db, 'settings', false, store => store.get('user')) }
     hostSelected = Boolean(await transaction(db, 'settings', false, store => store.get('primary-role')))
+    if (hostSelected && document.documentElement.dataset.momoFloating !== 'true') await mobileMedia(primaryPrefix).recover()
     if (native) {
       const saved = await SecureStorage.getItem('sync-host').catch(() => null)
       if (saved) { try { hostConfig = JSON.parse(saved) } catch {} }
@@ -427,26 +454,45 @@ export function createMobileBridge() {
     mobile: true, privateBook, privatePickerActive,
     privatePicker(active) { privatePickerUntil = active ? Date.now() + 90000 : 0 },
     onPrivateLock(callback) { privateLockListener = callback },
-    saveBackup: platform === 'android' ? async file => syncTransport.saveBackup({backup:await file.text()}) : undefined,
+    releaseBackup,
     async handoff(op,...args) {
       await init
       if (!native || document.documentElement.dataset.momoFloating === 'true') return null
       if (op !== 'cutover') return handoff(op,...args)
       transferringRole = true
-      try { return await handoff(op,...args) } finally { transferringRole = false }
+      try { await privateBook('lock'); return await handoff(op,...args) } finally { transferringRole = false }
     },
     async migrationFile(direction,password,file) {
       await init
       if (!native || document.documentElement.dataset.momoFloating === 'true') throw new Error('请在手机全屏应用中迁移')
       if (direction === 'export') {
         const salt = crypto.getRandomValues(new Uint8Array(16)), key = await keyFor(password,salt)
-        const data = await box(key,salt,await portableSnapshot(),'momo/migration/v1')
-        return new File([JSON.stringify(data)],'桃桃便签.momobackup',{type:'application/octet-stream'})
+        const bytes = backupBytes(await portableSnapshot(), mediaFor(), async data =>
+          JSON.stringify(await box(key, salt, data, 'momo/migration/v1')))
+        if (platform === 'android') {
+          const { token } = await syncTransport.saveBackup()
+          try {
+            for await (const part of bytes) {
+              for (let n = 0; n < part.length; n += 256 * 1024) {
+                await syncTransport.appendBackup({ token, part: base64Block(part.subarray(n, n + 256 * 1024)) })
+              }
+            }
+            await syncTransport.closeBackup({ token })
+          } catch (error) {
+            await syncTransport.closeBackup({ token, abort: true }).catch(noop)
+            throw error
+          }
+          return true
+        }
+        return spoolBackup(bytes)
       }
-      if (direction !== 'import' || !file || file.size > 512*1024*1024) throw new Error('请选择 512 MB 以内的迁移包')
+      if (direction !== 'import' || !file) throw new Error('请选择迁移包')
       if (host.state().enabled || sync.state().enabled) throw new Error('请先停止同步或取消配对，再在新主设备导入')
-      const data = await openBox(password,JSON.parse(await file.text()),'momo/migration/v1')
-      await applyPromotion(await stageProfile(data.value,null)); location.reload(); return true
+      const staged = await restoreBackup(file.size, async (offset, count) =>
+        new Uint8Array(await file.slice(offset, offset + count).arrayBuffer()),
+        async envelope => (await openBox(password, JSON.parse(envelope), 'momo/migration/v1')).value,
+        data => stageProfile(data, null), mediaFor, discardStage)
+      await applyPromotion(staged); location.reload(); return true
     },
     supportsFollower: true,
     platform,
@@ -477,6 +523,9 @@ export function createMobileBridge() {
       if (!next && host.state().enabled) throw new Error('请先停止主设备同步')
       changingRole = true
       try {
+        if (!next && (await mobileMedia(primaryPrefix).list()).length) throw new Error('请先迁移附件至新主设备')
+        await privateBook('lock')
+        if (document.documentElement.dataset.momoFloating !== 'true') await mobileMedia(primaryPrefix).recover()
         await transaction(await ready, 'settings', true, store => store.put(next, 'primary-role'))
         hostSelected = next
         await activate(undefined)

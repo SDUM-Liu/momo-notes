@@ -2,13 +2,16 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { derive, encrypt, decrypt } = require('./sealed.cjs')
+const { privateMedia } = require('./private-media.cjs')
 const purpose = 'momo/private-book/v1'
 const { enrollmentInfo, enrollmentLifetime, totp, verify } = require('../shared/authenticator.mjs')
 const token = (secret, counter) => totp(Buffer.from(secret, 'base64'), counter)
 function privateBook(directory) {
   const file = path.join(directory, 'private-book.enc')
   let session, enrollment, timer, nextAttempt = 0
+  const media = privateMedia(directory, () => session)
   function lock() {
+    media.lock()
     clearTimeout(timer)
     session?.key.fill(0)
     session = undefined
@@ -19,7 +22,7 @@ function privateBook(directory) {
     fs.writeFileSync(file + '.tmp', JSON.stringify(box), { mode: 0o600 })
     fs.renameSync(file + '.tmp', file)
   }
-  return { lock, get unlocked() { return Boolean(session) }, call(op, args = {}) {
+  return { lock, mediaResponse: media.respond, get unlocked() { return Boolean(session) }, call(op, args = {}) {
     if (op === 'lock') { lock(); return }
     if (op === 'begin') {
       lock()
@@ -42,14 +45,20 @@ function privateBook(directory) {
       }
       try {
         s.value.last = verify(Buffer.from(s.value.secret, 'base64'), args.code, s.value.last)
+        media.recover(s.value.entries)
         persist(s)
       } catch (error) { s.key.fill(0); throw error }
       lock(); enrollment?.seed.fill(0); enrollment = undefined; session = s; touch()
       return s.value.entries
     }
     if (!session) throw new Error('已锁定，请重新验证')
+    if (op.startsWith('media')) {
+      const result = media.call(op, args, session)
+      if (op !== 'mediaRelease') touch()
+      return result
+    }
     if (op === 'save') {
-      if (!Array.isArray(args.entries) || Buffer.byteLength(JSON.stringify(args.entries)) > 128 * 1024 * 1024) throw new Error('私密便签超出 128 MB 上限')
+      if (!Array.isArray(args.entries)) throw new Error('私密便签格式无效')
       const value = { ...session.value, entries: args.entries }
       persist({ ...session, value })
       session.value = value
