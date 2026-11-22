@@ -24,6 +24,37 @@ public class MomoSyncPlugin extends Plugin {
         .followRedirects(false).followSslRedirects(false).build();
 
     @PluginMethod
+    public void saveBackup(PluginCall call) {
+        android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+        intent.setType("application/octet-stream");
+        intent.putExtra(android.content.Intent.EXTRA_TITLE, "桃桃便签.momobackup");
+        startActivityForResult(call, intent, "backupDestination");
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void backupDestination(PluginCall call, androidx.activity.result.ActivityResult result) {
+        if (call == null) return;
+        android.content.Intent data = result.getData();
+        if (result.getResultCode() != android.app.Activity.RESULT_OK || data == null || data.getData() == null) {
+            call.reject("保存已取消");
+            return;
+        }
+        android.net.Uri destination = data.getData();
+        getBridge().execute(() -> {
+            try (java.io.OutputStream output = getContext().getContentResolver().openOutputStream(destination, "wt")) {
+                String value = call.getString("backup");
+                if (output == null || value == null) throw new IOException();
+                output.write(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (Exception error) {
+                call.reject("迁移包写入失败");
+                return;
+            }
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void diagnose(PluginCall call) {
         HttpUrl origin;
         try {

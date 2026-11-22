@@ -47,9 +47,11 @@ async function test() {
       })
       try {
         await page.waitForFunction(() => innerWidth >= 500)
-        const frame = await image.boundingBox()
-        assert(Math.abs(frame.width - original.width) < 0.1, 'Opening the note stretched the previous pose horizontally')
-        assert(Math.abs(frame.height - original.height) < 0.1, 'Opening the note stretched the previous pose vertically')
+        assert(original.width > 0)
+        assert.equal(await image.isVisible(), false)
+        assert(await page.locator('#panel').isVisible())
+        const perch = await page.locator('#mascot-perch').boundingBox()
+        assert(perch.width <= 66.1 && perch.height <= 63.1 && perch.x > 400)
       } finally {
         await app.evaluate(({ BrowserWindow }, b) => BrowserWindow.getAllWindows()[0].setBounds(b), bounds)
         await page.waitForFunction(() => innerWidth < 200)

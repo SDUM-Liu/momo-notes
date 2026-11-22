@@ -112,6 +112,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
   const select = $('codex-thread')
   const model = wireModelPicker(api, $, errorMessage)
   let config, threads = [], cursor, history = [], currentJob, listCursor
+  let steering = false
   let watching = false
   let request = 0
   let scope = 0
@@ -408,6 +409,7 @@ export function wireCodex(api, errorMessage, routeToNotes) {
 
   function draw(job) {
     currentJob = job
+    $('codex-send').disabled = steering || (watching && (job.status !== 'running' || !job.turnId))
     $('codex-output').textContent = job.output
     $('codex-output').hidden = !job.output
     $('codex-pending').textContent = job.prompt || ''
@@ -425,8 +427,23 @@ export function wireCodex(api, errorMessage, routeToNotes) {
 
   $('codex-form').onsubmit = event => {
     event.preventDefault()
-    if (watching) return
     const prompt = promptBox.value.trim()
+    if (watching) {
+      if (steering || !prompt || !currentJob?.turnId || currentJob.status !== 'running') return
+      const before = scope
+      steering = true
+      $('codex-send').disabled = true
+      void action(async () => {
+        try {
+          await api.codex('steer', { id: currentJob.id, turnId: currentJob.turnId, prompt })
+          if (scope === before && promptBox.value.trim() === prompt) promptBox.value = ''
+        } finally {
+          steering = false
+          if (scope === before) $('codex-send').disabled = watching && !currentJob?.turnId
+        }
+      })
+      return
+    }
     if (!prompt || (!taskMode && !select.value && routeToNotes(prompt))) {
       if (prompt) promptBox.value = ''
       return

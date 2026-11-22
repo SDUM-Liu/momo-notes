@@ -24,6 +24,10 @@ if (process.platform === 'linux' && process.env.WAYLAND_DISPLAY) app.commandLine
 if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.resolve(process.env.MOMO_DATA_DIR))
 
 let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, browser, sync, follower, codex
+const migration = require('./migration.cjs')
+let transfer
+let profileDirectory
+let book
 let mode = 'pet'
 let hoverTimer
 let quitting = false
@@ -46,7 +50,7 @@ function syncState() {
 function setMode(next, activate = true) {
   clearInterval(hoverTimer)
   mode = next
-  if (mode !== 'note') browser?.hide()
+  if (mode !== 'note') { book?.lock(); browser?.hide() }
   win.setBounds(position(mode, currentArea(anchor), anchor, edge))
   syncState()
   if (activate && mode === 'note') {
@@ -79,6 +83,7 @@ function refreshDay() {
 }
 
 async function ask(request) {
+  if (book?.unlocked) throw new Error('请先锁定私密便签')
   if (asking) throw new Error('上一条提问仍在处理')
   asking = true
   try {
@@ -90,6 +95,7 @@ async function ask(request) {
 }
 
 function codexAction(op, data, paired = false) {
+  if (book?.unlocked) throw new Error('请先锁定私密便签')
   if (op === 'notes') return codex.ask(data, paired)
   if (op === 'job' || op === 'interrupt') {
     const job = codex.jobResult(data, paired)
@@ -100,10 +106,28 @@ function codexAction(op, data, paired = false) {
   if (op === 'display-check') return codex.displayCheck(paired)
   if (op === 'list') return codex.list(data, paired)
   if (op === 'read') return codex.read(data, paired)
-  if (op === 'send') return codex.send(data, paired)
+  if (op === 'steer') return codex.steer(data, paired)
+  if (op === 'send') {
+    const diagnostic = /^检查设备\s+([a-f0-9]{8})$/.exec(String(data?.prompt).trim())
+    if (diagnostic) return reportDevice(diagnostic[1], data, paired)
+    return codex.send(data, paired)
+  }
   throw new Error('未知的桃桃 AI 请求')
 }
 
+function sshConfig() {
+  const filename = path.join(profileDirectory, 'ssh-devices.json')
+  return fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {}
+}
+async function reportDevice(prefix, data, paired) {
+  if (paired && !codex.settings().enabled) throw new Error('请先开启桃桃 AI 共享')
+  const devices = sync.state().devices.filter(d => d.id.startsWith(prefix))
+  const alias = devices.length === 1 && sshConfig()[devices[0].id]
+  if (!alias || follower.store) throw new Error('请先在主设备上为该设备授权 SSH 主机名检查')
+  const name = await require('./ssh.cjs').hostName(alias)
+  if (book.unlocked) throw new Error('请先锁定私密便签')
+  return codex.send({ ...data, taskMode: false, prompt: '用户要求检查设备 ' + prefix + '。主机已通过 SSH 执行 hostname。请仅汇报本次检查结果。主机名数据为 ' + JSON.stringify(name) }, paired)
+}
 async function launchHostCodex(options) {
   const port = store.data.settings.proxyPort
   if (port) {
@@ -141,6 +165,52 @@ function registerIPC() {
     if (fromApp(event)) callback()
   })
 
+  handle('private:book', (op, data) => {
+    if (op !== 'lock' && (mode !== 'note' || follower.store)) throw new Error('请在主设备上打开')
+    if (op === 'unlock' && (asking || codex.busy())) throw new Error('请先结束当前 AI 任务')
+    return book.call(op, data)
+  })
+  for (const op of ['target', 'ready', 'prepare', 'receive', 'chunk', 'cutover', 'pending', 'finish'])
+    handle('handoff:' + op, (...args) => transfer[op](...args))
+  handle('migration:file', async (direction, password) => {
+    if (book.unlocked || codex.busy() || asking) throw new Error('请先锁定私密便签并结束 AI 任务')
+    sync.requireWritable()
+    if (direction === 'export') {
+      if (follower.store) throw new Error('请在主设备导出')
+      const result = await dialog.showSaveDialog(win, { defaultPath: '桃桃便签.momobackup', filters: [{ name: '桃桃迁移包', extensions: ['momobackup'] }] })
+      if (result.canceled) return false
+      const data = migration.pack(migration.snapshot(profileDirectory, store, safeStorage), password)
+      const tmp = result.filePath + '.' + require('node:crypto').randomUUID() + '.tmp'
+      try { fs.writeFileSync(tmp, data, { mode: 0o600, flag: 'wx' }); fs.renameSync(tmp, result.filePath) }
+      finally { fs.rmSync(tmp, { force: true }) }
+      return true
+    }
+    if (direction !== 'import') throw new Error('未知迁移操作')
+    if (sync.state().enabled) throw new Error('请先停止本机的主设备同步')
+    const result = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: '桃桃迁移包', extensions: ['momobackup'] }] })
+    if (result.canceled) return false
+    const source = result.filePaths[0]
+    if (fs.statSync(source).size > 512 * 1024 * 1024) throw new Error('迁移包超过 512 MB')
+    const data = migration.unpack(fs.readFileSync(source, 'utf8'), password)
+    const root = app.getPath('userData')
+    migration.activate(root, migration.stage(root, data, safeStorage))
+    app.relaunch(); app.quit()
+    return true
+  })
+  handle('device:ssh-config', (id, alias) => {
+    if (follower.store || !sync.state().devices.some(d => d.id === id)) throw new Error('设备未登记')
+    const config = sshConfig()
+    if (alias === undefined) return config[id] || ''
+    if (alias && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(alias)) throw new Error('SSH 别名无效')
+    if (alias) config[id] = alias; else delete config[id]
+    const file = path.join(profileDirectory, 'ssh-devices.json')
+    fs.writeFileSync(file + '.tmp', JSON.stringify(config), { mode: 0o600 }); fs.renameSync(file + '.tmp', file)
+    return alias
+  })
+  handle('device:ssh', (id, alias) => {
+    if (follower.store || !sync.state().devices.some(d => d.id === id)) throw new Error('请在主设备选择已登记的设备')
+    return require('./ssh.cjs').openTerminal(alias)
+  })
   handle('app:state', state)
   handle('window:toggle', toggle)
   handle('updates:check', updates.check)
@@ -321,7 +391,12 @@ function registerIPC() {
 }
 
 function start() {
-  store = openStore(app.getPath('userData'))
+  profileDirectory = migration.activePath(app.getPath('userData'))
+  store = openStore(profileDirectory)
+  book = require('./private-book.cjs').privateBook(profileDirectory)
+  const lockBook = () => { book.lock(); win?.webContents.send('private:locked') }
+  powerMonitor.on('lock-screen', lockBook)
+  powerMonitor.on('suspend', lockBook)
   app.dock?.hide()
   today = localDay()
   const area = screen.getPrimaryDisplay().workArea
@@ -365,7 +440,7 @@ function start() {
   browser = createBrowser(win, value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
   })
-  follower = createFollower(app.getPath('userData'), {
+  follower = createFollower(profileDirectory, {
     seal(code) {
       const basic = process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
       return safeStorage.isEncryptionAvailable() && !basic ? safeStorage.encryptString(code).toString('base64') : ''
@@ -382,10 +457,16 @@ function start() {
   })
   if (!follower.store) today = store.today()
   updates.source(follower.snapshot()?.id)
-  codex = createCodex(app.getPath('userData'), { get data() { return notesStore().data } }, approveCodex, launchHostCodex)
-  sync = createSync(app.getPath('userData'), store, ask, change => {
+  codex = createCodex(profileDirectory, { get data() { return notesStore().data } }, approveCodex, launchHostCodex)
+  sync = createSync(profileDirectory, store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
   }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort))
+  transfer = require('./handoff.cjs').handoff({ root: app.getPath('userData'), directory: profileDirectory,
+    sync, follower, credentials: safeStorage, snapshot: () => migration.snapshot(profileDirectory, store, safeStorage),
+    check() {
+      sync.requireWritable()
+      if (book.unlocked || asking || codex.busy()) throw new Error('请先锁定私密便签并结束 AI 任务')
+    }, restart() { setTimeout(() => { app.relaunch(); app.quit() }, 1000) } })
   registerIPC()
   win.once('ready-to-show', () => win.showInactive())
   win.on('close', event => {
@@ -402,7 +483,7 @@ function start() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '打开便签', click: () => setMode('note') },
     { label: '显示桌宠', click: () => setMode('pet') },
-    { label: '打开数据目录', click: () => shell.openPath(app.getPath('userData')) },
+    { label: '打开数据目录', click: () => shell.openPath(profileDirectory) },
     { type: 'separator' },
     { label: '退出桃桃便签', click: () => app.quit() },
   ]))

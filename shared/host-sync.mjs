@@ -7,6 +7,18 @@ const revisionOf = doc => digest(JSON.stringify(doc))
 
 export function createHostSync({ config = {}, store, ask, notify, codex, update, defaults, relayOverride, persist }) {
   const replay = new Map()
+  const lastSeen = new Map()
+  function recordDevice(value) {
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value?.id) ||
+        !['Android','iPhone','iPad','Windows','Mac','Linux','设备'].includes(value.platform)) return
+    config.devices ??= []
+    if (!config.devices.some(d => d.id === value.id)) {
+      if (config.devices.length >= 100) return
+      config.devices.push({ id: value.id, platform: value.platform })
+      persist()
+    }
+    lastSeen.set(value.id, Date.now())
+  }
   let lease, leaseTimer
   let queue = Promise.resolve()
   function enqueue(operation) {
@@ -54,7 +66,8 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     : routes().some(url => !statuses.has(url) || statuses.get(url) === 'connecting') ? 'connecting' : 'offline'
 
   function state() {
-    return { role: 'host', enabled: enabled(), relay: relay(), fallback: backup(),
+    return { role: 'host', devices: (config.devices || []).map(d => ({ ...d,
+      online: enabled() && Date.now() - (lastSeen.get(d.id) || 0) < 65000 })), enabled: enabled(), relay: relay(), fallback: backup(),
       onlineRelay: routes().find(url => statuses.get(url) === 'online'),
       status: enabled() ? status() : 'offline', locked: Boolean(lease) }
   }
@@ -74,6 +87,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
   }
 
   async function processRequest({ op, payload, token }) {
+    if (op === 'state' || op === 'index') recordDevice(payload)
     if (op === 'state' || op === 'test') return { locked: Boolean(lease) }
     if (op === 'index') return { categories: store.data.categories, revisions: store.data.revisions, locked: Boolean(lease) }
     if (op === 'edit' || op === 'category') {
@@ -219,6 +233,8 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     },
     rotate() {
       if (!enabled()) throw new Error('请先开启主机同步')
+      config.devices = []
+      lastSeen.clear()
       config.key = randomHex()
       config.owner = randomHex()
       persist()

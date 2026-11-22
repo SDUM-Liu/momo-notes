@@ -14,6 +14,8 @@ import { desktopFollower } from './desktop-follower.js'
 import pet from './assets/pet.png'
 import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
+import { wireHandoff } from './handoff.js'
+import { wirePrivateBook } from './private-book.js'
 import './style.css'
 
 const api = window.momo ? desktopFollower(window.momo) : (await import('./mobile-bridge.js')).createMobileBridge()
@@ -29,6 +31,41 @@ for (const button of document.querySelectorAll('[data-icon]')) {
   button.innerHTML = iconFiles['/node_modules/lucide-static/icons/' + button.dataset.icon + '.svg'] ?? ''
 }
 
+void $('mascot-perch').decode().catch(() => {})
+wirePrivateBook(api)
+wireHandoff(api, saveBeforeSwitch, connectHostLink)
+for (const direction of ['export', 'import']) {
+  const button = $('migration-' + direction)
+  const file = $('migration-source')
+  if (direction === 'import' && api.mobile) file.onchange = () => { if (file.files.length) button.click() }
+  button.onclick = async () => {
+    const input = $('migration-password')
+    if (input.value.length < 12) { input.focus(); $('settings-status').textContent = '迁移包口令至少需要 12 个字符'; return }
+    if (api.mobile && direction === 'import' && !file.files.length) { file.click(); return }
+    button.disabled = true
+    try {
+      await saveBeforeSwitch()
+      const result = api.mobile ? await api.migrationFile(direction,input.value,file.files[0]) : await api.migrationFile(direction,input.value)
+      if (result instanceof File) {
+        const save = $('migration-share')
+        save.hidden = false
+        save.onclick = async () => {
+          try {
+            if (api.saveBackup) await api.saveBackup(result)
+            else if (navigator.canShare?.({files:[result]})) await navigator.share({files:[result]})
+            else {
+              const url = URL.createObjectURL(result), a = document.createElement('a')
+              a.href = url; a.download = result.name; a.click(); setTimeout(() => URL.revokeObjectURL(url),60000)
+            }
+            save.hidden = true; save.onclick = null
+          } catch (error) { $('settings-status').textContent = errorMessage(error) }
+        }
+        $('settings-status').textContent = '迁移包已生成'
+      } else if (result) $('settings-status').textContent = '迁移包已保存'
+    } catch (error) { $('settings-status').textContent = errorMessage(error) }
+    finally { input.value = ''; file.value = ''; button.disabled = false }
+  }
+}
 const dayFormat = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric' })
 const weekFormat = new Intl.DateTimeFormat('zh-CN', { weekday: 'long' })
 const noteDate = day => new Date(day + 'T12:00:00')
@@ -89,6 +126,7 @@ function showView(next) {
 }
 
 function drawState(value) {
+  if (value.mode !== 'note' && $('book-dialog').open) $('book-dialog').close()
   const wasMode = state?.mode
   state = value
   today = state.today
@@ -107,10 +145,8 @@ function drawState(value) {
   const pose = state.mode === 'note' ? perch : state.mode === 'edge' ? state.settings.edgeImage || defaultEdge : pet
   if (image.getAttribute('src') !== pose) image.setAttribute('src', pose)
   image.classList.toggle('custom', state.mode === 'edge' && Boolean(state.settings.edgeImage))
-  if (wasMode && wasMode !== state.mode && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    $('mascot').animate([{ opacity: 0.55, translate: '0 3px' }, { opacity: 1, translate: '0 0' }],
-      { duration: 150, easing: 'ease-out' })
-  }
+
+  if (wasMode === 'note' && state.mode !== 'note' && view !== 'note') showView('note')
   mascotLabel()
   if (wasMode !== 'note' && state.mode === 'note') {
     showView('note')
@@ -686,7 +722,47 @@ async function connectHostLink() {
   stopHostLink = () => links.forEach(stop => stop())
 }
 
+function drawDeviceList(devices) {
+  const list = $('sync-device-list')
+  const key = JSON.stringify(devices)
+  if (list.dataset.items === key) return
+  list.dataset.items = key
+  list.replaceChildren()
+  if (!devices.length) list.textContent = '新版从设备完成同步后会出现在这里。'
+  for (const d of devices) {
+    const row = document.createElement('div'), label = document.createElement('p')
+    label.textContent = d.platform + ' · ' + d.id.slice(0, 8) + (d.online ? ' · 在线' : ' · 离线')
+    row.append(label)
+    if (api.deviceSSH) {
+      const input = document.createElement('input'), button = document.createElement('button')
+      input.placeholder = '该设备已验证的 SSH Host 别名'; input.value = localStorage.getItem('ssh/' + d.id) || ''
+      button.type = 'button'; button.className = 'quiet'; button.textContent = '打开 SSH 终端'
+      button.onclick = async () => {
+        try { await api.deviceSSH(d.id, input.value.trim()); localStorage.setItem('ssh/' + d.id, input.value.trim()) }
+        catch (e) { $('sync-status').textContent = errorMessage(e) }
+      }
+      const consent = document.createElement('button')
+      consent.type = 'button'; consent.className = 'quiet'
+      let allowed = ''
+      function refreshConsent() { consent.textContent = allowed ? '撤销 AI 主机名检查' : '允许 AI 检查主机名' }
+      void api.deviceSSHConfig(d.id).then(alias => { allowed = alias; if (!input.value) input.value = alias; refreshConsent() }).catch(() => {})
+      refreshConsent()
+      consent.onclick = async () => {
+        try {
+          if (!allowed && !input.value.trim()) throw new Error('请先输入设备的 SSH 别名')
+          allowed = await api.deviceSSHConfig(d.id, allowed ? '' : input.value.trim())
+          refreshConsent()
+          $('sync-status').textContent = allowed ? '在桃桃 AI 中发送「检查设备 ' + d.id.slice(0, 8) + '」' : '已撤销授权'
+        } catch (e) { $('sync-status').textContent = errorMessage(e) }
+      }
+      row.append(input, button, consent)
+    }
+    list.append(row)
+  }
+}
+setInterval(() => { if (view === 'sync') void api.syncState().then(drawSync).catch(() => {}) }, 10000)
 function drawSync(value) {
+  drawDeviceList(value.devices || [])
   syncState = value
   const mobile = value.role === 'mobile'
   const phoneHost = api.mobile && value.role === 'host'
@@ -1097,6 +1173,7 @@ async function init() {
   async function reflectChange(change) {
     if (!state) return
     if (change.profileChanged) {
+      if ($('book-dialog').open) $('book-dialog').close()
       composingEdit = false
       pendingNoteChange = undefined
       ++profileRevision

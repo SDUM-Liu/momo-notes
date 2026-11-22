@@ -367,8 +367,25 @@ html[data-momo-floating="true"] body[data-platform="mobile"][data-mode="note"] .
 body[data-platform="mobile"] .top { padding-right: 12px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .top { padding-right: 53px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .foot { padding-right: 35px; }
+#book-dialog { overflow: auto; max-height: 88vh; }
+#book-list details { padding: 6px 0; }
+#book-list :is(img,video,audio) { max-width: 100%; }
+#book-list p { white-space: pre-wrap; overflow-wrap: anywhere; }
+#mascot-perch { display: none; }
+/* On desktop the native resize and the IPC mode update can arrive in different frames. */
+@media (min-width: 200px) {
+  body:not([data-platform="mobile"])[data-mode] #panel { display: flex !important; }
+  body:not([data-platform="mobile"])[data-mode] .mascot {
+    inset: 1px 13px auto auto; width: 66px; height: 63px; padding: 0;
+  }
+  body:not([data-platform="mobile"]) #mascot-perch { display: block; transform: none; }
+  body:not([data-platform="mobile"]) #mascot-image { display: none; }
+}
+@media (max-width: 199px) {
+  body:not([data-platform="mobile"]) #panel { display: none !important; }
+}
 @media (prefers-reduced-motion: no-preference) {
-  body[data-mode="note"] .panel { animation: open-note 150ms ease-out; transform-origin: top right; }
+  body[data-platform="mobile"][data-mode="note"] .panel { animation: open-note 150ms ease-out; transform-origin: top right; }
   html[data-momo-floating="true"] body[data-mode="note"] .panel { animation-name: open-floating-note; }
   @keyframes open-note { from { opacity: .65; scale: .985; } }
   @keyframes open-floating-note { from { opacity: .65; scale: .98; } }

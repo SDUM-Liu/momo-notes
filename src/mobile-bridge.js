@@ -2,13 +2,16 @@ import { App } from '@capacitor/app'
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core'
 import { InAppBrowser, DefaultWebViewOptions, ToolbarPosition } from '@capacitor/inappbrowser'
 import { SecureStorage } from '@aparajita/capacitor-secure-storage'
-import { defaultSettings, defaultCategory, builtInCategories, datesFor, hasContent, newCategory, newDayNote, noteKey, nodeText, localDay } from '../shared/notes.mjs'
+import { defaultSettings, defaultCategory, builtInCategories, datesFor, noteIdentity, validateCategory, hasContent, newCategory, newDayNote, noteKey, nodeText, localDay } from '../shared/notes.mjs'
 import { endpoint, modelAnswer, modelPayload, validateProxyPort } from '../shared/ai.mjs'
 import { codexSetupUrl, webUrl } from '../shared/links.mjs'
+import { mobileHandoff } from './mobile-handoff.js'
+import { keyFor, box, openBox } from './mobile-sealed.js'
+import { mobileBook } from './mobile-book.js'
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
 import { mobileUpdates } from './mobile-updates.js'
-import { digest, parsePairing } from '../shared/sync.mjs'
+import { digest, parsePairing, transferId } from '../shared/sync.mjs'
 import { createHostSync } from '../shared/host-sync.mjs'
 import { createUpdateSource } from '../shared/update-transfer.mjs'
 import relayDefaults from '../shared/relay.json'
@@ -54,6 +57,7 @@ export function createMobileBridge() {
   const records = Object.create(null)
   const revisions = Object.create(null)
   let localDrafts = {}
+  let primaryPrefix = '', transferringRole = false
   let namespace = ''
   let categories = [...builtInCategories]
   let writes = Promise.resolve()
@@ -70,6 +74,9 @@ export function createMobileBridge() {
     mode, today, settings: publicSettings(), browser, categories, locked: syncStatus().locked, mobileHost: hostSelected,
     update: updates.state,
   })
+  const privateBook = mobileBook(
+    async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
+    async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')), () => hostSelected && !transferringRole && document.documentElement.dataset.momoFloating !== 'true')
   const syncStatus = () => hostSelected ? host.state() : sync.state()
 
   function queueWrite(operation) {
@@ -116,6 +123,7 @@ export function createMobileBridge() {
 
   function saveNote(date, doc, category = defaultCategory, base) {
     const key = noteKey(category, date)
+    if (transferringRole) throw new Error('正在移交主设备')
     if (hostSelected) return host.write({ key, doc, base: base ?? records[key]?.rev })
     return queueWrite(async () => {
       const previous = records[key]
@@ -133,7 +141,7 @@ export function createMobileBridge() {
   async function activate(connection, oldCode) {
     return queueWrite(async () => {
       const db = await ready
-      const next = connection ? digest('momo-notes/cache/' + connection.key) + '/' : ''
+      const next = connection ? digest('momo-notes/cache/' + connection.key) + '/' : primaryPrefix
       const oldKey = /^momo1:[^:]+:([a-f0-9]{64})$/.exec(oldCode || '')?.[1]
       let legacyProfile = await transaction(db, 'settings', false, store => store.get('legacy-profile'))
       if (!legacyProfile && oldKey) {
@@ -265,8 +273,85 @@ export function createMobileBridge() {
       onNotes({ locked: value.locked })
     },
   })
+  const dbGet = async key => transaction(await ready,'settings',false,s => s.get(key))
+  const dbPut = async (key,value) => transaction(await ready,'settings',true,s => value == null ? s.delete(key) : s.put(value,key))
+  const secure = {
+    async get(name) { const raw = await SecureStorage.getItem(name).catch(() => null); return raw ? JSON.parse(raw) : null },
+    set(name,value) { return value == null ? SecureStorage.removeItem(name) : SecureStorage.setItem(name,JSON.stringify(value)) },
+  }
+  async function portableSnapshot() {
+    if (!native || !hostSelected || host.state().locked) throw new Error('请在同步结束后从主设备导出')
+    await writes
+    const book = await dbGet(primaryPrefix + 'private-book')
+    return { format:1, notes:structuredClone(notes), categories:structuredClone(categories), settings:{...settings,key:''},
+      apiKey:await SecureStorage.getItem(keyName).catch(() => '') || '', book:book ? JSON.stringify(book) : null }
+  }
+  async function stageProfile(data, config) {
+    if (data?.format !== 1 || !Array.isArray(data.categories) || !data.notes) throw new Error('迁移包格式无效')
+    const prefix = 'primary-' + transferId() + '/'
+    const cats = [...builtInCategories,...data.categories.filter(c => !builtInCategories.some(b => b.id === c.id)).map(validateCategory)]
+    const records = Object.entries(data.notes).map(([key,doc]) => {
+      if (!cats.some(c => c.id === noteIdentity(key).category) || doc?.type !== 'doc' || !Array.isArray(doc.content)) throw new Error('便签数据有误')
+      return { date:prefix + key, doc, rev:digest(JSON.stringify(doc)), dirty:false }
+    })
+    const book = data.book ? JSON.parse(data.book) : null
+    const db = await ready
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction(['settings','notes'],'readwrite')
+      tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error)
+      for (const record of records) tx.objectStore('notes').put(record)
+      const metadata = tx.objectStore('settings')
+      metadata.put(cats,prefix + 'categories')
+      if (book) metadata.put(book,prefix + 'private-book')
+      metadata.put({...defaultSettings,...data.settings,key:''},prefix + 'user')
+    })
+    await secure.set('staged-' + prefix.slice(0,-1),{config,apiKey:data.apiKey || ''})
+    return prefix
+  }
+  async function applyPromotion(prefix) {
+    const credentials = await secure.get('staged-' + prefix.slice(0,-1))
+    if (!credentials) throw new Error('接管资料不存在')
+    const settings = await dbGet(prefix + 'user')
+    await secure.set('promotion',prefix)
+    await SecureStorage.setItem('sync-host',JSON.stringify(credentials.config || {}))
+    if (credentials.apiKey) await SecureStorage.setItem(keyName,credentials.apiKey)
+    else await SecureStorage.removeItem(keyName).catch(noop)
+    const db = await ready
+    await new Promise((resolve,reject) => {
+      const tx = db.transaction('settings','readwrite'), s = tx.objectStore('settings')
+      s.put(true,'primary-role'); s.put(prefix,'primary-prefix'); s.put(settings,'user')
+      tx.oncomplete = resolve; tx.onabort = () => reject(tx.error); tx.onerror = () => reject(tx.error)
+    })
+    const rx = await secure.get('handoff-receive')
+    if (rx?.staged === prefix) { rx.done = Date.now(); await secure.set('handoff-receive',rx) }
+    await SecureStorage.removeItem('sync-pair').catch(noop)
+    await secure.set('promotion',null)
+    await secure.set('staged-' + prefix.slice(0,-1),null)
+  }
+  async function demote(code) {
+    if (hostSelected && host) { host.setEnabled(false); await hostSave }
+    await SecureStorage.setItem('sync-pair',code)
+    await dbPut('primary-role',false)
+    hostSelected = false
+  }
+  const handoff = mobileHandoff({ get:dbGet,put:dbPut,secure,pair:async () => {
+    if (hostSelected) throw new Error('请在已绑定的从设备上接收')
+    return SecureStorage.getItem('sync-pair')
+  },snapshot:portableSnapshot,stage:stageProfile,activate:async prefix => {
+    await applyPromotion(prefix); setTimeout(() => location.reload(),1200)
+  },demote,current:() => {
+    if (!hostSelected || host.state().locked) throw new Error('请在同步结束后移交主设备')
+    return {config:{...hostConfig},pair:host.code()}
+  } })
   const backgroundSync = () => sync.run(true).catch(noop)
   const init = ready.then(async db => {
+    if (native) {
+      const recovery = await secure.get('promotion')
+      if (recovery) await applyPromotion(recovery)
+      const retiring = await secure.get('handoff-send')
+      if (retiring) await demote(retiring.pair)
+    }
+    primaryPrefix = await dbGet('primary-prefix') || ''
     settings = { ...settings, ...await transaction(db, 'settings', false, store => store.get('user')) }
     hostSelected = Boolean(await transaction(db, 'settings', false, store => store.get('primary-role')))
     if (native) {
@@ -289,7 +374,7 @@ export function createMobileBridge() {
     if (native) {
       hasKey = Boolean(await SecureStorage.getItem(keyName).catch(() => null))
       await App.addListener('appStateChange', ({ isActive }) => {
-        if (isActive) { void runRefresh(); void backgroundSync() }
+        if (isActive) { void runRefresh(); void backgroundSync() } else void privateBook('lock')
       })
       await App.addListener('appUrlOpen', ({ url }) => openWidget(url))
       await InAppBrowser.addListener('browserClosed', () => {
@@ -310,7 +395,28 @@ export function createMobileBridge() {
   })
 
   return {
-    mobile: true,
+    mobile: true, privateBook,
+    saveBackup: platform === 'android' ? async file => syncTransport.saveBackup({backup:await file.text()}) : undefined,
+    async handoff(op,...args) {
+      await init
+      if (!native || document.documentElement.dataset.momoFloating === 'true') return null
+      if (op !== 'cutover') return handoff(op,...args)
+      transferringRole = true
+      try { return await handoff(op,...args) } finally { transferringRole = false }
+    },
+    async migrationFile(direction,password,file) {
+      await init
+      if (!native || document.documentElement.dataset.momoFloating === 'true') throw new Error('请在手机全屏应用中迁移')
+      if (direction === 'export') {
+        const salt = crypto.getRandomValues(new Uint8Array(16)), key = await keyFor(password,salt)
+        const data = await box(key,salt,await portableSnapshot(),'momo/migration/v1')
+        return new File([JSON.stringify(data)],'桃桃便签.momobackup',{type:'application/octet-stream'})
+      }
+      if (direction !== 'import' || !file || file.size > 512*1024*1024) throw new Error('请选择 512 MB 以内的迁移包')
+      if (host.state().enabled || sync.state().enabled) throw new Error('请先停止同步或取消配对，再在新主设备导入')
+      const data = await openBox(password,JSON.parse(await file.text()),'momo/migration/v1')
+      await applyPromotion(await stageProfile(data.value,null)); location.reload(); return true
+    },
     supportsFollower: true,
     platform,
     floatingPet,
@@ -353,7 +459,7 @@ export function createMobileBridge() {
     async syncLinkStatus(...args) { return host.status(...args) },
     async syncCode() { return host.code() },
     async rotateSync() { const value = host.rotate(); await hostSave; return value },
-    syncExchange: value => hostSelected ? host.exchange(value) : null,
+    syncExchange: value => hostSelected && !transferringRole ? host.exchange(value) : null,
     async pairSync(code) {
       await init
       if (hostSelected || changingRole) throw new Error('请先切换为从设备')
@@ -411,6 +517,7 @@ export function createMobileBridge() {
     },
     async addCategory(name) {
       const item = newCategory(name)
+      if (transferringRole) throw new Error('正在移交主设备')
       if (hostSelected) return host.category(item)
       await mergeCategories(await sync.addCategory(item))
       return categories

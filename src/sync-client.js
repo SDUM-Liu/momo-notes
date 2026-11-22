@@ -24,7 +24,16 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     return op === 'test' ? reply.via : response.value
   }
 
-  const index = connection => request(connection, 'index')
+  function identity(connection) {
+    try {
+      const key = 'momo-device/' + connection.room
+      let id = localStorage.getItem(key)
+      if (!id) { id = crypto.randomUUID(); localStorage.setItem(key, id) }
+      const platform = /Android|iPhone|iPad|Windows|Mac|Linux/i.exec(navigator.userAgent)?.[0] || '设备'
+      return { id, platform }
+    } catch { return undefined }
+  }
+  const index = connection => request(connection, 'index', identity(connection))
 
   async function probe() {
     const connection = pair
@@ -33,7 +42,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     probing = (async () => {
       let recover = false
       try {
-        const result = await request(connection, 'state')
+        const result = await request(connection, 'state', identity(connection))
         if (connection !== pair || running) return
         peerLocked = result.locked
         recover = !peerLocked && !verified

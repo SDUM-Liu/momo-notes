@@ -446,7 +446,15 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
           const { thread } = await threadInScope(request.id, paired)
           const latest = await client.request('thread/turns/list', { threadId: request.id, limit: 1, itemsView: 'summary' })
           if (thread.status?.type === 'active' || latest.data[0]?.status === 'inProgress') {
-            throw new Error('原会话正在运行，请等它结束后再续接')
+            const running = latest.data[0]
+            if (!running?.id || running.status !== 'inProgress') throw new Error('当前服务尚未获取到正在工作的轮次，请稍后重试')
+            try {
+              await client.request('turn/steer', { threadId: request.id, expectedTurnId: running.id, input: textInput(prompt) })
+            } catch { throw new Error('原会话由另一进程运行，当前服务未能向它提交补充说明') }
+            job.threadId = request.id
+            job.output = '已向当前轮次提交补充说明'
+            complete(job, 'completed')
+            return
           }
           try { folder = fs.realpathSync(thread.cwd) } catch { throw new Error('原会话工作目录已不存在，仍可查看历史') }
         } else folder = scope()
@@ -487,6 +495,7 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
 
   return {
     ask, jobResult, settings, configure, share, list, read, send,
+    busy: () => [...jobs.values()].some(job => job.status === 'running'),
     folder: scope,
     async displayCheck(paired) {
       requireRemote(paired)
@@ -507,6 +516,17 @@ function createCodex(directory, store, approve, spawnServer = appServer) {
       if (!activeRemote || (paired && !(activeRemote.threadId
         ? canRead(activeRemote.threadId, true) : activeRemote.paired))) return null
       return jobResult(activeRemote.id, paired)
+    },
+    async steer({ id, turnId, prompt }, paired) {
+      jobResult(id, paired)
+      const job = jobs.get(id)
+      if (job !== activeRemote || job.status !== 'running' || !turnId || turnId !== job.turnId)
+        throw new Error('当前任务已经切换，请重新发送')
+      if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 12000)
+        throw new Error('请输入 1 至 12000 字的补充说明')
+      await job.client.request('turn/steer', { threadId: job.threadId, expectedTurnId: turnId, input: textInput(prompt.trim()) })
+      job.prompt = (job.prompt + '\n\n' + prompt.trim()).slice(-limit)
+      return jobResult(id, paired)
     },
     async interrupt(id) {
       const job = jobs.get(id)
