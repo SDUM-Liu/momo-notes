@@ -74,9 +74,26 @@ export function createMobileBridge() {
     mode, today, settings: publicSettings(), browser, categories, locked: syncStatus().locked, mobileHost: hostSelected,
     update: updates.state,
   })
-  const privateBook = mobileBook(
+  let privateLockListener = noop, ordinaryBrowser, privateWebPage = false
+  const bookOperation = mobileBook(
     async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
     async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')), () => hostSelected && !transferringRole && document.documentElement.dataset.momoFloating !== 'true')
+  async function privateBook(op, args) {
+    const result = await bookOperation(op, args)
+    if (op === 'unlock') {
+      ordinaryBrowser = browser
+      browser = { url: '', loading: false, canGoBack: false }
+      onBrowser(browser)
+    } else if ((op === 'lock' || op === 'background') && ordinaryBrowser) {
+      if (privateWebPage) void InAppBrowser.close().catch(noop)
+      privateWebPage = false
+      browser = ordinaryBrowser
+      ordinaryBrowser = undefined
+      onBrowser(browser)
+      if (op === 'background') privateLockListener()
+    }
+    return result
+  }
   const syncStatus = () => hostSelected ? host.state() : sync.state()
 
   function queueWrite(operation) {
@@ -385,6 +402,7 @@ export function createMobileBridge() {
       })
       await App.addListener('appUrlOpen', ({ url }) => openWidget(url))
       await InAppBrowser.addListener('browserClosed', () => {
+        privateWebPage = false
         browser = { ...browser, loading: false, closed: true }
         onBrowser(browser)
       })
@@ -402,7 +420,7 @@ export function createMobileBridge() {
   })
 
   return {
-    mobile: true, privateBook,
+    mobile: true, privateBook, onPrivateLock(callback) { privateLockListener = callback },
     saveBackup: platform === 'android' ? async file => syncTransport.saveBackup({backup:await file.text()}) : undefined,
     async handoff(op,...args) {
       await init
@@ -587,6 +605,7 @@ export function createMobileBridge() {
       const url = webUrl(value)
       if (!native) throw new Error('请在移动安装版中打开网页')
       if (floatingPet) await petOverlay.foreground()
+      privateWebPage = Boolean(ordinaryBrowser)
       browser = { ...browser, url, closed: false }
       onBrowser(browser)
       await InAppBrowser.openInWebView({

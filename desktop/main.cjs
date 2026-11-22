@@ -47,10 +47,25 @@ function syncState() {
   win.webContents.send('app:state-changed', state())
 }
 
+let ordinaryBrowser
+function makeBrowser(partition) {
+  const instance = createBrowser(win, value => {
+    if (browser === instance && !quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
+  }, partition)
+  return instance
+}
+function restoreBrowser() {
+  if (!ordinaryBrowser) return
+  const closed = browser
+  browser = ordinaryBrowser
+  ordinaryBrowser = undefined
+  closed.dispose()
+  win.webContents.send('browser:changed', browser.state)
+}
 function setMode(next, activate = true) {
   clearInterval(hoverTimer)
   mode = next
-  if (mode !== 'note') { book?.lock(); browser?.hide() }
+  if (mode !== 'note') { book?.lock(); restoreBrowser(); browser?.hide() }
   win.setBounds(position(mode, currentArea(anchor), anchor, edge))
   syncState()
   if (activate && mode === 'note') {
@@ -168,7 +183,15 @@ function registerIPC() {
   handle('private:book', (op, data) => {
     if (op !== 'lock' && (mode !== 'note' || follower.store)) throw new Error('请在主设备上打开')
     if (op === 'unlock' && (asking || codex.busy())) throw new Error('请先结束当前 AI 任务')
-    return book.call(op, data)
+    const result = book.call(op, data)
+    if (op === 'unlock') {
+      restoreBrowser()
+      ordinaryBrowser = browser
+      ordinaryBrowser.hide()
+      browser = makeBrowser('momo-private-' + require('node:crypto').randomUUID())
+      win.webContents.send('browser:changed', browser.state)
+    } else if (op === 'lock' || op === 'begin') restoreBrowser()
+    return result
   })
   for (const op of ['target', 'ready', 'prepare', 'receive', 'chunk', 'cutover', 'pending', 'finish'])
     handle('handoff:' + op, (...args) => transfer[op](...args))
@@ -220,12 +243,12 @@ function registerIPC() {
   handle('installers:catalog', installers.catalog)
   handle('installers:download', installers.download)
   handle('installers:reveal', installers.reveal)
-  handle('browser:open', browser.open)
+  handle('browser:open', url => browser.open(url))
   handle('browser:viewport', bounds => {
     if (mode === 'note' && Object.values(bounds).every(Number.isFinite)) browser.setViewport(bounds)
   })
-  handle('browser:hide', browser.hide)
-  handle('browser:back', browser.back)
+  handle('browser:hide', () => browser.hide())
+  handle('browser:back', () => browser.back())
   handle('sync:state', sync.state)
   handle('sync:enable', (enabled, ...args) => {
     if (enabled && follower.store) throw new Error('请先取消从设备配对，再开启主设备同步')
@@ -394,7 +417,7 @@ function start() {
   profileDirectory = migration.activePath(app.getPath('userData'))
   store = openStore(profileDirectory)
   book = require('./private-book.cjs').privateBook(profileDirectory)
-  const lockBook = () => { book.lock(); win?.webContents.send('private:locked') }
+  const lockBook = () => { book.lock(); restoreBrowser(); win?.webContents.send('private:locked') }
   powerMonitor.on('lock-screen', lockBook)
   powerMonitor.on('suspend', lockBook)
   app.dock?.hide()
@@ -437,9 +460,7 @@ function start() {
   installers = createInstallerDownloads(progress => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('installers:progress', progress)
   })
-  browser = createBrowser(win, value => {
-    if (!quitting && !win.isDestroyed()) win.webContents.send('browser:changed', value)
-  })
+  browser = makeBrowser()
   follower = createFollower(profileDirectory, {
     seal(code) {
       const basic = process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
@@ -474,7 +495,7 @@ function start() {
     event.preventDefault()
     setMode(edge ? 'edge' : 'pet', false)
   })
-  win.on('closed', () => { clearInterval(hoverTimer); browser.dispose() })
+  win.on('closed', () => { clearInterval(hoverTimer); browser.dispose(); ordinaryBrowser?.dispose() })
   win.loadFile(path.join(__dirname, '../dist/index.html'))
 
   tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 32, height: 32 }))

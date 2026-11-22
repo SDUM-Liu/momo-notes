@@ -1,8 +1,8 @@
 const { WebContentsView, session } = require('electron')
 const { linkOrNull } = require('../shared/links.mjs')
 
-function createBrowser(win, onChange) {
-  let view, viewport
+function createBrowser(win, onChange, partition = 'persist:momo-browser') {
+  let view, viewport, disposed = false
   let state = { url: '', loading: false, canGoBack: false, error: '' }
 
   function send(changes) {
@@ -29,7 +29,7 @@ function createBrowser(win, onChange) {
   }
 
   function createView() {
-    const webSession = session.fromPartition('persist:momo-browser')
+    const webSession = session.fromPartition(partition)
     webSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     webSession.setPermissionCheckHandler(() => false)
     view = new WebContentsView({
@@ -60,6 +60,7 @@ function createBrowser(win, onChange) {
   }
 
   function open(value) {
+    if (disposed) return
     const url = linkOrNull(value)
     if (!url) throw new Error('请输入以 https:// 或 http:// 开头的链接')
     if (!view) createView()
@@ -80,7 +81,10 @@ function createBrowser(win, onChange) {
     },
     hide: () => { viewport = undefined; view?.setVisible(false) },
     dispose: () => {
+      disposed = true
+      if (view && !win.isDestroyed()) win.contentView.removeChildView(view)
       const contents = view?.webContents
+      view = undefined
       if (contents && !contents.isDestroyed()) contents.close()
     },
   }

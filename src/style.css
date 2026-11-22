@@ -52,6 +52,8 @@ nav button, .toolbar button {
   display: grid; place-items: center; width: 29px; height: 28px;
   padding: 0; border: 0; border-radius: 6px; background: transparent; color: #655062;
 }
+#book-return { display: flex; width: auto; align-items: center; gap: 3px; padding: 0 5px; white-space: nowrap; }
+#book-return span { display: flex; }
 nav button:hover, .toolbar button:hover, nav button.active, .toolbar button[aria-pressed="true"] {
   background: #efdbe7; color: #783c57;
 }
@@ -368,9 +370,6 @@ body[data-platform="mobile"] .top { padding-right: 12px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .top { padding-right: 53px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .foot { padding-right: 35px; }
 #book-dialog { overflow: auto; max-height: 88vh; }
-#book-list details { padding: 6px 0; }
-#book-list :is(img,video,audio) { max-width: 100%; }
-#book-list p { white-space: pre-wrap; overflow-wrap: anywhere; }
 #mascot-perch { display: none; }
 /* On desktop the native resize and the IPC mode update can arrive in different frames. */
 @media (min-width: 200px) {
@@ -394,3 +393,5 @@ body[data-platform="mobile"] :is(input, select, textarea, .tiptap) { font-size: 
 body[data-platform="mobile"] .link-form { top: 133px; }
 body[data-platform="mobile"] :is(.chat-head .quiet, .chat-send) { min-height: 42px; min-width: 42px; }
 body[data-platform="mobile"] .switch-row { min-height: 43px; }
+
+.tiptap :is(audio, video) { display: block; max-width: 100%; }

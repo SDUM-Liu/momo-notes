@@ -58,6 +58,7 @@ jobs:
           npm run build
           MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" xvfb-run -a dbus-run-session -- node tests/desktop-follower.cjs
           MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" xvfb-run -a dbus-run-session -- node tests/docked-pet.cjs
+          MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" xvfb-run -a dbus-run-session -- node tests/private-editor.cjs
       - run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

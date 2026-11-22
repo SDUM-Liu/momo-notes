@@ -15,8 +15,9 @@
   </button>
   <main id="panel" class="panel" hidden>
     <header class="top">
-      <div id="title-drag" class="title-drag"><span class="brand-dot"></span>桃桃便签</div>
+      <div id="title-drag" class="title-drag"><span class="brand-dot"></span><span id="note-title">桃桃便签</span></div>
       <nav aria-label="便签工具">
+        <button id="book-return" aria-label="锁定并返回普通便签" title="锁定并返回普通便签" hidden><span data-icon="lock-keyhole"></span>锁定返回</button>
         <button id="history" data-icon="calendar" title="历史便签" aria-label="历史便签"></button>
         <button id="browser" data-icon="globe" title="内置浏览器" aria-label="内置浏览器"></button>
         <button id="question" data-icon="sparkles" title="桃桃 AI" aria-label="桃桃 AI"></button>
@@ -343,15 +344,7 @@
       <label>身份验证器验证码<input id="book-code" inputmode="numeric" autocomplete="off" required pattern="[0-9]{6}"></label>
       <button class="primary">解锁</button>
     </form>
-    <section id="book-content" hidden>
-      <nav id="book-tabs"></nav><div id="book-list"></div>
-      <form id="book-add" class="fields"><input id="book-title" placeholder="名称" required maxlength="150">
-        <textarea id="book-text" placeholder="内容"></textarea>
-        <input id="book-file" type="file" accept="image/*,audio/*,video/*" hidden>
-        <button class="primary">保存条目</button>
-      </form>
-    </section>
-    <p id="book-status" role="status"></p><button id="book-close" class="quiet">锁定并关闭</button>
+    <p id="book-status" role="status"></p><button id="book-close" class="quiet">取消</button>
   </dialog>
 </body>
 </html>

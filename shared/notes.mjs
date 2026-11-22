@@ -62,7 +62,7 @@ export function nodeText(node, withStatus = false) {
 }
 
 export function hasContent(node) {
-  return Boolean(node.text?.trim() || ['image', 'table'].includes(node.type) || node.content?.some(hasContent))
+  return Boolean(node.text?.trim() || ['image', 'table', 'noteMedia'].includes(node.type) || node.content?.some(hasContent))
 }
 
 export function datesFor(notes, category, today) {

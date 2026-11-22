@@ -1,4 +1,5 @@
-import { Editor } from '@tiptap/core'
+import { privatePages } from './private-pages.js'
+import { Editor, Node } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
@@ -24,7 +25,7 @@ if (api.mobile) {
   document.body.dataset.mobileOs = api.platform
 }
 const $ = id => document.getElementById(id)
-const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,globe,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,link,image,table-2,panel-left,square-pen,x,arrow-up,square,refresh-cw,message-circle}.svg', {
+const iconFiles = import.meta.glob('/node_modules/lucide-static/icons/{calendar,globe,sparkles,settings,bold,italic,underline,strikethrough,heading,list-checks,list,list-ordered,link,image,table-2,panel-left,square-pen,x,arrow-up,square,refresh-cw,message-circle,lock-keyhole}.svg', {
   query: '?raw', import: 'default', eager: true,
 })
 for (const button of document.querySelectorAll('[data-icon]')) {
@@ -32,7 +33,7 @@ for (const button of document.querySelectorAll('[data-icon]')) {
 }
 
 void $('mascot-perch').decode().catch(() => {})
-wirePrivateBook(api)
+wirePrivateBook(api, enterPrivatePages)
 wireHandoff(api, saveBeforeSwitch, connectHostLink)
 for (const direction of ['export', 'import']) {
   const button = $('migration-' + direction)
@@ -87,6 +88,92 @@ let readOnly = false
 let retryOnUnlock = false
 let composingEdit = false
 let pendingNoteChange
+let privateStore, ordinaryPage, privateTimer, switchingBook = false
+const noteStore = () => privateStore || api
+const photoTypes = $('image-input').accept
+const noteMedia = Node.create({
+  name: 'noteMedia', group: 'block', atom: true, draggable: true,
+  addAttributes() { return { src: { default: '' }, alt: { default: '' } } },
+  parseHTML() { return [{ tag: 'audio[src^="data:audio/"]' }, { tag: 'video[src^="data:video/"]' }] },
+  renderHTML({ node }) {
+    const src = node.attrs.src || ''
+    return [/^data:audio\//i.test(src) ? 'audio' : 'video', {
+      controls: '', preload: 'metadata', 'aria-label': node.attrs.alt,
+      src: /^data:(audio|video)\/[\w.+-]+;base64,/i.test(src) ? src : '',
+    }]
+  },
+})
+
+function resetPageContext() {
+  ++pageRequest; ++editGeneration
+  composingEdit = followNewDay = retryOnUnlock = previousSaveError = false
+  pendingNoteChange = undefined; currentDate = undefined
+  visited.clear(); revisions.clear()
+  $('dates').replaceChildren()
+  for (const id of ['link-url','link-label','category-name','image-input','saved-editor-draft']) $(id).value = ''
+  $('saved-editor-draft').hidden = $('reload-shared-note').hidden = true
+  editor.destroy()
+  createEditor()
+}
+function syncBookControls() {
+  const active = Boolean(privateStore)
+  $('book-return').hidden = !active
+  $('note-title').textContent = active ? '私密便签' : '桃桃便签'
+  $('settings-codex').disabled = $('question').disabled = active || Boolean(state.mobileHost)
+  $('image-input').accept = active ? photoTypes + ',audio/*,video/*' : photoTypes
+  const label = active ? '插入图片、视频或录音' : '插入图片'
+  $('insert-image').title = label
+  $('insert-image').setAttribute('aria-label', label)
+}
+function armPrivateLock() {
+  clearTimeout(privateTimer)
+  privateTimer = setTimeout(() => endPrivatePages(true), 285000)
+}
+async function enterPrivatePages(entries) {
+  await saveBeforeSwitch()
+  if (!$('book-dialog').open || state.mode !== 'note' || document.hidden) throw new Error('请重新解锁')
+  const store = privatePages(entries, async data => {
+    await api.privateBook('save', { entries: data })
+    if (privateStore === store) armPrivateLock()
+  })
+  ordinaryPage = { date: currentDate, category, visited: new Map(visited) }
+  privateStore = store
+  resetPageContext()
+  category = defaultCategory
+  syncBookControls(); setReadOnly(false); drawCategories(store.categories)
+  armPrivateLock(); showView('note')
+  await loadNote()
+}
+async function endPrivatePages(forced = false) {
+  const store = privateStore
+  if (!store || (!forced && switchingBook)) return
+  switchingBook = true
+  try {
+    if (!forced) await saveBeforeSwitch()
+    if (privateStore !== store) return
+    const pendingSaves = saveQueue
+    clearTimeout(privateTimer)
+    const profile = profileRevision
+    const back = ordinaryPage
+    privateStore = ordinaryPage = undefined
+    resetPageContext()
+    category = back.category
+    for (const item of back.visited) visited.set(...item)
+    syncBookControls(); drawCategories(state.categories); setReadOnly(state.locked)
+    showView('note')
+    await pendingSaves
+    store.close()
+    await api.privateBook('lock')
+    if (!privateStore && profile === profileRevision) await loadNote(back.date, category)
+  } catch (error) { noteStatus(errorMessage(error), true) }
+  finally { switchingBook = false }
+}
+$('book-return').onclick = () => endPrivatePages()
+api.onPrivateLock?.(() => {
+  if ($('book-dialog').open) $('book-dialog').close()
+  void endPrivatePages(true)
+})
+document.addEventListener('visibilitychange', () => { if (document.hidden && privateStore) void endPrivatePages(true) })
 
 function errorMessage(error) {
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -129,11 +216,12 @@ function drawState(value) {
   if (value.mode !== 'note' && $('book-dialog').open) $('book-dialog').close()
   const wasMode = state?.mode
   state = value
+  if (value.mode !== 'note' && privateStore) void endPrivatePages(true)
   today = state.today
   drawUpdate(state.update)
   drawBrowser(state.browser)
-  drawCategories(value.categories)
-  setReadOnly(value.locked)
+  drawCategories(privateStore?.categories || value.categories)
+  setReadOnly(!privateStore && value.locked)
   document.body.dataset.mode = state.mode
   document.body.dataset.edge = state.edge ?? ''
   $('panel').hidden = state.mode !== 'note'
@@ -231,7 +319,9 @@ function saveDocument(doc) {
   const key = noteKey(selected, date)
   const generation = ++editGeneration
   noteStatus('保存中…')
-  saveQueue = saveQueue.then(() => api.saveNote(date, doc, selected, revisions.get(key) ?? null)).then(saved => {
+  const store = noteStore()
+  saveQueue = saveQueue.then(() => store.saveNote(date, doc, selected, revisions.get(key) ?? null)).then(saved => {
+    if (store !== noteStore()) return
     const merged = JSON.stringify(saved.doc) !== JSON.stringify(doc)
     previousSaveError = false
     const active = date === currentDate && selected === category && generation === editGeneration
@@ -243,6 +333,7 @@ function saveDocument(doc) {
     }
     noteStatus('已保存')
   }).catch(error => {
+    if (store !== noteStore()) return
     previousSaveError = true
     const message = errorMessage(error)
     retryOnUnlock = /同步中|正在同步|主机未连接/.test(message)
@@ -269,7 +360,8 @@ async function loadNote(date, selected = category, navigate = true) {
   const request = ++pageRequest
   try {
     await saveBeforeSwitch()
-    const page = await api.openNote(date, selected)
+    if (request !== pageRequest) return
+    const page = await noteStore().openNote(date, selected)
     if (request !== pageRequest) return
     if (currentDate !== page.date || category !== page.category) editor.commands.setContent(page.doc, { emitUpdate: false })
     category = page.category
@@ -335,7 +427,10 @@ if (!api.mobile) {
   $('mascot').addEventListener('pointerenter', hover)
   $('mascot').addEventListener('pointermove', hover)
 }
-wireDrag($('mascot'), () => {
+wireDrag($('mascot'), async () => {
+  if (privateStore) {
+    try { await saveBeforeSwitch() } catch (error) { noteStatus(errorMessage(error), true); return }
+  }
   if (state.mode === 'note' && view === 'browser') showView('note')
   else if (api.mobile) void dismissMobile()
   else void api.toggle()
@@ -395,11 +490,15 @@ $('category-cancel').onclick = () => { $('category-form').hidden = true }
 $('category-form').onsubmit = async event => {
   event.preventDefault()
   try {
+    const store = noteStore()
     await saveBeforeSwitch()
-    state.categories = await api.addCategory($('category-name').value)
+    if (store !== noteStore()) return
+    const categories = await store.addCategory($('category-name').value)
+    if (store !== noteStore()) return
+    if (!privateStore) state.categories = categories
     $('category-name').value = ''
-    drawCategories(state.categories)
-    await loadNote(undefined, state.categories.at(-1).id)
+    drawCategories(categories)
+    await loadNote(undefined, categories.at(-1).id)
   } catch (error) {
     noteStatus(errorMessage(error), true)
   }
@@ -424,7 +523,9 @@ async function openPage(value) {
   try {
     const url = webUrl(value)
     $('browser-url').blur()
+    const store = noteStore()
     await saveBeforeSwitch()
+    if (store !== noteStore()) return
     showView('browser')
     $('browser-url').value = url
     await api.openBrowser(url)
@@ -480,7 +581,9 @@ $('history').onclick = async () => {
   list.textContent = '正在读取…'
   try {
     await saveBeforeSwitch()
-    const dates = await api.listDates(category)
+    const store = noteStore()
+    const dates = await store.listDates(category)
+    if (store !== noteStore() || view !== 'history') return
     list.replaceChildren()
     for (const date of dates) {
       const button = document.createElement('button')
@@ -542,17 +645,19 @@ function fileData(file) {
 
 async function insertImages(files, position) {
   if (readOnly) return
+  const store = noteStore()
   const date = currentDate
   const selected = category
   for (const file of files) {
     try {
-      if (!/^image\/(png|jpeg|webp|gif|bmp)$/.test(file.type)) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片')
-      if (file.size > 8 * 1024 * 1024) throw new Error('请选择 8 MB 以内的图片')
+      const media = privateStore && /^(?:audio|video)\//.test(file.type)
+      if (!media && !/^image\/(png|jpeg|webp|gif|bmp)$/.test(file.type)) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片')
+      if (file.size > (media ? 32 : 8) * 1024 * 1024) throw new Error(media ? '请选择 32 MB 以内的媒体文件' : '请选择 8 MB 以内的图片')
       const src = await fileData(file)
-      if (readOnly || date !== currentDate || selected !== category) return
-      const image = { type: 'image', attrs: { src, alt: file.name } }
+      if (store !== noteStore() || readOnly || date !== currentDate || selected !== category) return
+      const image = { type: media ? 'noteMedia' : 'image', attrs: { src, alt: file.name } }
       if (position !== undefined) editor.chain().focus().insertContentAt(position, image).run()
-      else editor.chain().focus().setImage(image.attrs).run()
+      else editor.chain().focus().insertContent(image).run()
       position = undefined
     } catch (error) {
       noteStatus(errorMessage(error), true)
@@ -780,7 +885,7 @@ function drawSync(value) {
   $('sync-photo-label').textContent = api.mobile ? '从相册识别' : '从二维码图片识别'
   $('api-settings').hidden = phoneHost || (mobile && value.enabled)
   $('api-heading').hidden = phoneHost
-  $('settings-codex').disabled = $('question').disabled = phoneHost
+  $('settings-codex').disabled = $('question').disabled = phoneHost || Boolean(privateStore)
   $('mobile-ai-host').hidden = !phoneHost && (!mobile || !value.enabled)
   $('mobile-ai-host').textContent = phoneHost ? '手机作为主设备时，桃桃 AI 不可用。' : '配对电脑后，由电脑处理桃桃 AI 的请求。'
   if (mobile) {
@@ -1016,7 +1121,7 @@ function chatMode(notes, work = false) {
   if (notes) codexView.drawer(false)
 }
 function openChat(back) {
-  if (api.mobile && syncState?.role === 'host') return
+  if (privateStore || (api.mobile && syncState?.role === 'host')) return
   chatBack = back
   chatMode(false)
   codexView.drawer(false)
@@ -1117,10 +1222,10 @@ $('ai-form').onsubmit = async event => {
 }
 
 function imageFiles(transfer) {
-  return [...(transfer?.files ?? [])].filter(file => file.type.startsWith('image/'))
+  return [...(transfer?.files ?? [])].filter(file => file.type.startsWith('image/') || (privateStore && /^(audio|video)\//.test(file.type)))
 }
 
-async function init() {
+function createEditor() {
   editor = new Editor({
     element: $('editor'),
     extensions: [
@@ -1130,6 +1235,7 @@ async function init() {
         a11y: { checkboxLabel: node => node.attrs.checked ? '恢复为待办' : '标记完成' },
       }),
       Image.configure({ allowBase64: true, resize: { enabled: true, minWidth: 40, minHeight: 30 } }),
+      ...(privateStore ? [noteMedia] : []),
       TableKit.configure({ table: { resizable: true } }),
       Placeholder.configure({ placeholder: '写下一件待办…', includeChildren: true }),
     ],
@@ -1159,20 +1265,29 @@ async function init() {
     onUpdate: ({ editor }) => {
       drawProgress()
       if (!currentDate) return
-      composingEdit = api.mobile && editor.view.composing
+      composingEdit = !privateStore && api.mobile && editor.view.composing
       if (!composingEdit) saveDocument(editor.getJSON())
     },
     onSelectionUpdate: () => { if (editor) drawProgress() },
   })
+}
+async function init() {
+  createEditor()
   api.onState(drawState)
-  if (api.editorIdle) editor.view.dom.addEventListener('blur', () => {
+  if (api.editorIdle) $('editor').addEventListener('focusout', () => {
     setTimeout(() => { void saveQueue.then(() => api.editorIdle()) }, 0)
   })
   api.onUpdate(drawUpdate)
   api.onBrowser(drawBrowser)
   async function reflectChange(change) {
     if (!state) return
+    if (privateStore && !change.profileChanged) {
+      if (typeof change.locked === 'boolean') state.locked = change.locked
+      if (change.categories) state.categories = change.categories
+      return
+    }
     if (change.profileChanged) {
+      if (privateStore) void endPrivatePages(true)
       if ($('book-dialog').open) $('book-dialog').close()
       composingEdit = false
       pendingNoteChange = undefined
@@ -1227,8 +1342,9 @@ async function init() {
     const request = pageRequest
     if (editor.view.composing) { pendingNoteChange = change; return }
     await saveQueue
+    if (privateStore) return
     const page = await api.openNote(currentDate, category).catch(() => null)
-    if (!page || previousSaveError || generation !== editGeneration || request !== pageRequest) return
+    if (privateStore || !page || previousSaveError || generation !== editGeneration || request !== pageRequest) return
     if (editor.view.composing) { pendingNoteChange = change; return }
     revisions.set(change.key, page.rev)
     if (JSON.stringify(editor.getJSON()) !== JSON.stringify(page.doc)) {
@@ -1237,10 +1353,10 @@ async function init() {
     }
   }
   api.onNotes(reflectChange)
-  editor.view.dom.addEventListener('compositionend', () => {
-    const date = currentDate, selected = category, profile = profileRevision
+  $('editor').addEventListener('compositionend', () => {
+    const date = currentDate, selected = category, profile = profileRevision, store = noteStore()
     setTimeout(() => {
-      if (editor.view.composing || profile !== profileRevision || date !== currentDate || selected !== category) return
+      if (store !== noteStore() || editor.view.composing || profile !== profileRevision || date !== currentDate || selected !== category) return
       if (composingEdit && currentDate) {
         composingEdit = false
         saveDocument(editor.getJSON())
