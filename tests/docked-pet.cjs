@@ -34,6 +34,28 @@ async function test() {
       screen.getCursorScreenPoint = () => globalThis.cursor
     })
     const pet = page.locator('#mascot')
+    // Native window resizing can reach the compositor before the renderer receives the new pose.
+    async function checkOpeningFrame() {
+      const image = page.locator('#mascot-image')
+      await image.evaluate(img => img.decode())
+      const original = await image.boundingBox()
+      const bounds = await app.evaluate(({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0]
+        const initial = win.getBounds()
+        win.setBounds({ ...initial, width: 520, height: 400 })
+        return initial
+      })
+      try {
+        await page.waitForFunction(() => innerWidth >= 500)
+        const frame = await image.boundingBox()
+        assert(Math.abs(frame.width - original.width) < 0.1, 'Opening the note stretched the previous pose horizontally')
+        assert(Math.abs(frame.height - original.height) < 0.1, 'Opening the note stretched the previous pose vertically')
+      } finally {
+        await app.evaluate(({ BrowserWindow }, b) => BrowserWindow.getAllWindows()[0].setBounds(b), bounds)
+        await page.waitForFunction(() => innerWidth < 200)
+      }
+    }
+    await checkOpeningFrame()
     const appearance = await pet.evaluate(button => {
       const style = getComputedStyle(button)
       return { fill: style.backgroundColor, border: style.borderTopWidth }
@@ -41,6 +63,7 @@ async function test() {
     assert.deepEqual(appearance, { fill: 'rgba(0, 0, 0, 0)', border: '0px' })
     await pet.dispatchEvent('pointerenter', { pointerType: 'mouse' })
     await mode('pet')
+    await checkOpeningFrame()
     await app.evaluate(() => { globalThis.cursor.x += 150 })
     await mode('edge')
     await app.evaluate(() => { globalThis.cursor.x -= 150 })
