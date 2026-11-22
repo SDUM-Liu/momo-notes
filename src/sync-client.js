@@ -1,9 +1,10 @@
 import { parsePairing, seal, unseal, wireLimit, transferId } from '../shared/sync.mjs'
+import { pairedTcpProbe } from '../shared/tcp-probe.mjs'
 
 export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change,
   readOnly = false, reconcile = () => {}, editing = () => false }) {
   let pair, running, probing, switching, verified = false, peerLocked = true, last = '', error = ''
-  let via
+  let via, tcpProbe
   let transferring = false
   let deferred = false
   const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), sshHintScope: pair?.room, via, last, error,
@@ -150,6 +151,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     disconnected(connection) {
       if (!pair || pair.key !== connection.key || pair.room !== connection.room ||
           pair.relay !== connection.relay || pair.fallback !== connection.fallback || pair.backupRoom !== connection.backupRoom) return
+      tcpProbe?.abort('unavailable')
       peerLocked = true
       verified = false
       error = '主机连接中断，等待重新同步'
@@ -187,10 +189,45 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         throw error
       }
     },
+    async remoteBook(op, payload = {}) {
+      const connection = pair
+      if (!connection || switching) throw new Error('请先配对并连接保存私密便签的电脑')
+      const device = identity(connection)
+      if (!device) throw new Error('无法验证本设备，请先完成一次同步')
+      try {
+        if (op === 'begin') await request(connection, 'state', device)
+        if (connection !== pair || switching) throw new Error('配对已变更，请重新打开')
+        const result = await request(connection, 'private-book/' + op, { ...payload, device })
+        if (connection !== pair || switching) throw new Error('配对已变更，请重新打开')
+        return result
+      } catch (error) {
+        if (/未知的同步请求|同步锁已失效/.test(error.message)) throw new Error('请更新主设备上的桃桃后重试')
+        throw error
+      }
+    },
     async test(code) {
       const connection = String(code ?? '').trim() ? parsePairing(code) : pair
       if (!connection) throw new Error('请先输入主机配对码')
       return request(connection, 'test')
+    },
+    async testTcpProbe(local, code) {
+      const connection = pair
+      if (!connection || switching) return { status: 'unpaired' }
+      if (String(code ?? '').trim()) {
+        let target
+        try { target = parsePairing(code) } catch { return { status: 'unpaired' } }
+        if (target.key !== connection.key || target.room !== connection.room || target.relay !== connection.relay) return { status: 'unpaired' }
+      }
+      if (tcpProbe) return { status: 'busy' }
+      const device = identity(connection)
+      if (!device) return { status: 'unavailable' }
+      const current = new AbortController()
+      tcpProbe = current
+      try {
+        return await pairedTcpProbe(local, (op, data) => request(connection, op, data), device, current.signal)
+      } finally {
+        tcpProbe = undefined
+      }
     },
     async edit(payload) {
       if (state().locked) throw new Error('正在同步，完成后可编辑便签')
@@ -216,6 +253,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     async pairWith(code) {
       const next = parsePairing(code)
       if (switching) throw new Error('正在切换设备，请稍候')
+      tcpProbe?.abort()
       switching = true
       change(state())
       try {
@@ -234,6 +272,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     },
     async unpair() {
       if (switching) throw new Error('正在切换设备，请稍候')
+      tcpProbe?.abort()
       switching = true
       change(state())
       try {

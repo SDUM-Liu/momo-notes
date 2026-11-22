@@ -18,8 +18,15 @@ export function mobileBook(read, write, primary, getMedia) {
     return closing
   }
   function touch() { clearTimeout(timer); timer = setTimeout(() => { void lock().catch(() => {}) }, 300000) }
+  function requirePrimary() {
+    const available = primary()
+    if (available === true) return
+    const message = typeof available === 'string' ? available : '请在主设备的全屏桃桃应用中打开私密便签'
+    throw Object.assign(new Error(message), { code: 'BOOK_UNAVAILABLE' })
+  }
   function guard(version) {
-    if (version !== revision || !primary()) throw new Error('私密便签已锁定')
+    requirePrimary()
+    if (version !== revision) throw Object.assign(new Error('验证期间页面已锁定，请回到桃桃后重试'), { code: 'BOOK_STALE' })
   }
   async function save(s, value, version) {
     const sealed = await box(s.key, s.salt, value, purpose)
@@ -29,10 +36,12 @@ export function mobileBook(read, write, primary, getMedia) {
   }
   let queue = Promise.resolve()
   async function operation(op, args = {}) {
-    if (!primary()) throw new Error('请在主设备打开私密便签')
     if (op === 'begin') {
-      await lock()
-      if (await read()) return {}
+      const cleanup = lock(), version = revision
+      await cleanup
+      const stored = await read()
+      guard(version)
+      if (stored) return {}
       if (!enrollment || Date.now() >= enrollment.expires) {
         enrollment = { seed: crypto.getRandomValues(new Uint8Array(20)), label: 'Private-' + crypto.randomUUID().slice(0,8).toUpperCase(),
           expires: Date.now() + enrollmentLifetime }
@@ -42,9 +51,10 @@ export function mobileBook(read, write, primary, getMedia) {
     if (op === 'unlock') {
       if (Date.now() < nextAttempt) throw new Error('请稍后再试')
       nextAttempt = Date.now() + 1500
-      if (session) await lock()
-      const version = revision, stored = await read()
-      await closing
+      const cleanup = session ? lock() : closing, version = revision
+      await cleanup
+      const stored = await read()
+      guard(version)
       let s
       if (stored) s = await openBox(args.password, stored, purpose)
       else {
@@ -58,6 +68,7 @@ export function mobileBook(read, write, primary, getMedia) {
       guard(version)
       if (store) await store.recover(new Set(files().map(file => file.id)))
       await save(s, s.value, version)
+      guard(version)
       enrollment?.seed.fill(0); enrollment = undefined; session = s
       if (store) attachments = sessionMedia(store, s.key, () => guard(version), touch, files)
       touch(); return s.value.entries
@@ -70,7 +81,7 @@ export function mobileBook(read, write, primary, getMedia) {
     if (op === 'background') { if (session || !enrollment) return lock(); ++revision; return Promise.resolve() }
     if (op === 'lock') return lock()
     if (op.startsWith('media')) {
-      if (!attachments || !primary()) return Promise.reject(new Error('请在主设备重新验证'))
+      if (!attachments || primary() !== true) return Promise.reject(new Error('请在主设备重新验证'))
       return attachments.run(op, args || {})
     }
     const version = revision

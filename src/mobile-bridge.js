@@ -8,6 +8,7 @@ import { codexSetupUrl, webUrl } from '../shared/links.mjs'
 import { mobileHandoff } from './mobile-handoff.js'
 import { keyFor, box, openBox } from './mobile-sealed.js'
 import { mobileBook } from './mobile-book.js'
+import { remoteBook } from './remote-book.js'
 import { backupBytes, restoreBackup, base64Block } from '../shared/media-transfer.mjs'
 import { spoolBackup, releaseBackup } from './backup-file.js'
 import { mobileMedia } from './mobile-media.js'
@@ -80,28 +81,41 @@ export function createMobileBridge() {
   let privatePickerUntil = 0
   const privatePickerActive = () => Boolean(ordinaryBrowser && Date.now() < privatePickerUntil)
   let privateLockListener = noop, ordinaryBrowser, privateWebPage = false
+  const followerBook = remoteBook((op, args) => sync.remoteBook(op, args), () => restorePrivateBrowser(true))
   const bookOperation = mobileBook(
     async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
     async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')),
-    () => hostSelected && !changingRole && !transferringRole && document.documentElement.dataset.momoFloating !== 'true',
+    () => changingRole || transferringRole ? '请等待设备角色切换完成后再打开'
+      : document.documentElement.dataset.momoFloating === 'true' ? '请在桃桃全屏界面打开私密便签' : hostSelected,
     () => mobileMedia(primaryPrefix))
   async function privateBook(op, args) {
     if (op === 'background' && privatePickerActive()) return
-    const result = await bookOperation(op, args)
+    const locking = op === 'lock' || op === 'background'
+    if (!locking) {
+      await init
+      if (changingRole || transferringRole) throw new Error('请等待设备角色切换完成后再打开')
+      if (document.documentElement.dataset.momoFloating === 'true') throw new Error('请在桃桃全屏界面打开私密便签')
+    }
+    const operation = hostSelected ? bookOperation : followerBook
+    if (locking && !hostSelected) restorePrivateBrowser(op === 'background')
+    const result = await operation(op, args)
     if (op === 'unlock') {
       ordinaryBrowser = browser
       browser = { url: '', loading: false, canGoBack: false }
       onBrowser(browser)
-    } else if ((op === 'lock' || op === 'background') && ordinaryBrowser) {
+    } else if (locking) restorePrivateBrowser(op === 'background')
+    return result
+  }
+  function restorePrivateBrowser(notify) {
+    if (ordinaryBrowser) {
       privatePickerUntil = 0
       if (privateWebPage) void InAppBrowser.close().catch(noop)
       privateWebPage = false
       browser = ordinaryBrowser
       ordinaryBrowser = undefined
       onBrowser(browser)
-      if (op === 'background') privateLockListener()
+      if (notify) privateLockListener()
     }
-    return result
   }
   window.addEventListener('momo-floating-open', () => {
     privatePickerUntil = 0
@@ -268,7 +282,18 @@ export function createMobileBridge() {
     } catch {}
     return 'service_unavailable'
   }
-  const syncLink = mobileSyncLink(connection => sync.disconnected(connection), diagnoseSync)
+  const syncLink = mobileSyncLink(connection => {
+    if (!hostSelected && connection.room === sync.state().sshHintScope) {
+      restorePrivateBrowser(true)
+      void followerBook('background').catch(noop)
+    }
+    sync.disconnected(connection)
+  }, diagnoseSync)
+  const tcpProbe = native && platform === 'android' && Capacitor.isPluginAvailable('MomoSync') ? {
+    prepare: id => syncTransport.tcpProbePrepare({ id }),
+    run: (id, endpoint, token) => syncTransport.tcpProbeRun({ id, endpoint, token }),
+    cancel: id => syncTransport.tcpProbeCancel({ id }),
+  } : undefined
   const sync = mobileSync({
     editing: () => document.activeElement?.isContentEditable === true,
     exchange: syncLink.exchange,
@@ -413,7 +438,7 @@ export function createMobileBridge() {
       const saved = await SecureStorage.getItem('sync-host').catch(() => null)
       if (saved) { try { hostConfig = JSON.parse(saved) } catch {} }
     }
-    host = createHostSync({ config: hostConfig, store: primaryStore, defaults: relayDefaults, update: hostUpdates,
+    host = createHostSync({ config: hostConfig, store: primaryStore, defaults: relayDefaults, update: hostUpdates, tcpProbe,
       persist() {
         const value = JSON.stringify(hostConfig)
         hostSave = hostSave.catch(noop).then(() => SecureStorage.setItem('sync-host', value))
@@ -561,9 +586,11 @@ export function createMobileBridge() {
       await init
       if (hostSelected || changingRole) throw new Error('请先切换为从设备')
       if (host.owns(parsePairing(code).key)) throw new Error('不能配对本机的配对码')
+      await privateBook('background')
       try { return await sync.pairWith(code) } finally { updates.routeChanged() }
     },
     testSync: sync.test,
+    testTcpProbe: async code => { await init; return sync.testTcpProbe(tcpProbe, code) },
     async scanSyncCode() {
       if (floatingPet) {
         await petOverlay.foreground()
@@ -583,6 +610,7 @@ export function createMobileBridge() {
       }
     },
     async unpairSync() {
+      await privateBook('background')
       const result = await sync.unpair()
       syncLink.close()
       updates.routeChanged()

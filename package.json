@@ -1,10 +1,11 @@
 {
   "name": "momo-notes",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "description": "A desktop and mobile companion for daily notes and checklists",
   "main": "desktop/main.cjs",
   "scripts": {
-    "start": "vite build && electron .",
+    "start": "npm run build:tcp-probe && vite build && electron .",
+    "build:tcp-probe": "node build/tcp-probe.cjs",
     "build": "vite build",
     "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:linux": "npm run build && electron-builder --linux AppImage --x64 --publish never",

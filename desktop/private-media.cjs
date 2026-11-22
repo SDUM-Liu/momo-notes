@@ -40,6 +40,13 @@ function privateMedia(directory, getSession) {
     const files = entries?.[0]?.files
     return Array.isArray(files) ? files.filter(f => f?.storage === 'chunks-v1') : []
   }
+  function savedFile(session, id) {
+    const file = files(session.value.entries).find(f => f.id === id)
+    if (!file) throw new Error('附件未在文件列表中')
+    const meta = disk.readMeta(id)
+    if (file.size !== meta.size || file.mime !== meta.mime) throw new Error('附件元数据不匹配')
+    return meta
+  }
   function revoke(id) {
     const grant = grants.get(id)
     if (!grant) return
@@ -95,10 +102,7 @@ function privateMedia(directory, getSession) {
         disk.remove(id)
         return
       case 'mediaPreview': {
-        const file = files(session.value.entries).find(f => f.id === id)
-        if (!file) throw new Error('附件未在文件列表中')
-        const meta = disk.readMeta(id)
-        if (file.size !== meta.size || file.mime !== meta.mime) throw new Error('附件元数据不匹配')
+        const meta = savedFile(session, id)
         if (!grants.has(id)) {
           const token = randomBytes(24).toString('hex')
           const grant = { token, meta, streams: new Set() }
@@ -107,6 +111,13 @@ function privateMedia(directory, getSession) {
         }
         return 'momo-media://preview/' + grants.get(id).token
       }
+      case 'mediaInfo': {
+        const { size, mime } = savedFile(session, id)
+        return { size, mime }
+      }
+      case 'mediaRead':
+        savedFile(session, id)
+        return decryptChunk(session.key, id, args.index, disk.readRaw(id, args.index))
       case 'mediaRelease': revoke(id); return
       default: throw new Error('无效的附件操作')
     }

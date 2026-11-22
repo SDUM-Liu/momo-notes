@@ -17,6 +17,7 @@ const { codexSetupUrl } = require('../shared/links.mjs')
 const { defaultCategory, noteKey, newCategory, datesFor, newDayNote, emptyNote, localDay } = require('../shared/notes.mjs')
 const { parsePairing } = require('../shared/sync.mjs')
 const { createSync } = require('./sync.cjs')
+const { createTcpProbe } = require('./tcp-probe.cjs')
 const { createFollower } = require('./follower.cjs')
 const { createCodex } = require('./codex.cjs')
 const { appServer } = require('./codex-rpc.cjs')
@@ -33,10 +34,11 @@ let transfer
 let sshDevices
 let remoteSSH, localSSH
 let profileDirectory
-let book
+let book, remoteBook
 let mode = 'pet'
 let hoverTimer
 let quitting = false
+const tcpProbe = createTcpProbe()
 let asking = false
 
 const currentArea = point => screen.getDisplayNearestPoint(point).workArea
@@ -71,7 +73,7 @@ function restoreBrowser() {
 function setMode(next, activate = true) {
   clearInterval(hoverTimer)
   mode = next
-  if (mode !== 'note') { book?.lock(); restoreBrowser(); browser?.hide() }
+  if (mode !== 'note') { remoteBook?.localLock(); restoreBrowser(); browser?.hide() }
   win.setBounds(position(mode, currentArea(anchor), anchor, edge))
   syncState()
   if (activate && mode === 'note') {
@@ -197,7 +199,7 @@ function registerIPC() {
   handle('private:book', (op, data) => {
     if (op !== 'lock' && (mode !== 'note' || follower.store)) throw new Error('请在主设备上打开')
     if (op === 'unlock' && (asking || codex.busy())) throw new Error('请先结束当前 AI 任务')
-    const result = book.call(op, data)
+    const result = remoteBook.local(op, data)
     if (op === 'unlock') {
       restoreBrowser()
       ordinaryBrowser = browser
@@ -322,6 +324,13 @@ function registerIPC() {
   handle('sync:link', sync.link)
   handle('sync:status', sync.status)
   handle('sync:exchange', sync.exchange)
+  for (const op of ['prepare', 'run', 'cancel']) {
+    handle('tcp-probe:' + op, async (...args) => {
+      if (!follower.store || quitting || sync.state().enabled) return { ok: false, reason: 'unpaired' }
+      try { return await tcpProbe[op](...args) }
+      catch (error) { return { ok: false, reason: error.code || 'unavailable' } }
+    })
+  }
   handle('follower:code', () => follower.code)
   handle('follower:set', value => {
     if (value) {
@@ -484,9 +493,10 @@ function start() {
   store = openStore(profileDirectory)
   sshDevices = deviceProfiles(profileDirectory)
   book = require('./private-book.cjs').privateBook(profileDirectory)
-  session.defaultSession.protocol.handle('momo-media', request => mode === 'note' && !follower?.store
+  remoteBook = require('./remote-book.cjs').remoteBook(book, { isBusy: () => quitting || Boolean(follower?.store) || asking || Boolean(codex?.busy()) })
+  session.defaultSession.protocol.handle('momo-media', request => mode === 'note' && !follower?.store && !remoteBook.active
     ? book.mediaResponse(request) : new Response(null, { status: 404 }))
-  const lockBook = () => { book.lock(); restoreBrowser(); win?.webContents.send('private:locked') }
+  const lockBook = () => { remoteBook.forceLock(); restoreBrowser(); win?.webContents.send('private:locked') }
   powerMonitor.on('lock-screen', lockBook)
   powerMonitor.on('suspend', lockBook)
   app.dock?.hide()
@@ -520,6 +530,8 @@ function start() {
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('render-process-gone', stopSSH)
   win.webContents.on('did-start-loading', stopSSH)
+  win.webContents.on('render-process-gone', tcpProbe.close)
+  win.webContents.on('did-start-loading', tcpProbe.close)
   win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   updates = createUpdates(value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
@@ -541,6 +553,7 @@ function start() {
   }, change => {
     if (quitting || win.isDestroyed()) return
     if (change.profileChanged) {
+      tcpProbe.close()
       stopSSH()
       lockBook()
       today = follower.store ? localDay() : store.today()
@@ -554,7 +567,7 @@ function start() {
   codex = createCodex(profileDirectory, { get data() { return notesStore().data } }, approveCodex, launchHostCodex)
   sync = createSync(profileDirectory, store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
-  }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort))
+  }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort), tcpProbe, remoteBook)
   localSSH = createLocalSSHPipes({ isPaired: () => Boolean(!quitting && follower.store && !sync.state().enabled) })
   remoteSSH = createRemoteSSHHost({ takeOffer: id => sync.takeSSHOffer(id), join: joinSSHRelay, launch: openRemoteTerminal })
   transfer = require('./handoff.cjs').handoff({ root: app.getPath('userData'), directory: profileDirectory,
@@ -599,6 +612,8 @@ if (app.requestSingleInstanceLock()) {
   })
   app.on('before-quit', () => {
     quitting = true
+    remoteBook?.forceLock()
+    tcpProbe.close()
     stopSSH()
     clearInterval(dayTimer)
     updates?.stop()

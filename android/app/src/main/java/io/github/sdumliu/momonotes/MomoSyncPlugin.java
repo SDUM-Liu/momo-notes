@@ -29,6 +29,7 @@ import org.json.JSONObject;
 @CapacitorPlugin(name = "MomoSync")
 public class MomoSyncPlugin extends Plugin {
     private final LocalSsh ssh = new LocalSsh();
+    private final TcpProbe tcpProbe = new TcpProbe();
     private final OkHttpClient client = new OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build();
@@ -36,6 +37,32 @@ public class MomoSyncPlugin extends Plugin {
     private java.io.OutputStream backupStream;
     private android.net.Uri backupUri;
     private String backupToken;
+
+    @PluginMethod
+    public void tcpProbePrepare(PluginCall call) {
+        probeReply(call, tcpProbe.prepare(call.getString("id")));
+    }
+
+    @PluginMethod
+    public void tcpProbeRun(PluginCall call) {
+        probeReply(call, tcpProbe.run(call.getString("id"), call.getString("endpoint"), call.getString("token")));
+    }
+
+    @PluginMethod
+    public void tcpProbeCancel(PluginCall call) {
+        tcpProbe.cancel(call.getString("id"));
+        call.resolve(new JSObject());
+    }
+
+    private void probeReply(PluginCall call, CompletableFuture<TcpProbe.Result> operation) {
+        operation.thenAccept(answer -> {
+            JSObject result = new JSObject();
+            if (answer.endpoint != null) result.put("endpoint", answer.endpoint);
+            else result.put("ok", answer.reason == null);
+            if (answer.reason != null) result.put("reason", answer.reason);
+            call.resolve(result);
+        });
+    }
 
     @PluginMethod
     public void sshLocalOpen(PluginCall call) {
@@ -75,11 +102,13 @@ public class MomoSyncPlugin extends Plugin {
     protected void handleOnResume() {
         super.handleOnResume();
         ssh.setForeground(true);
+        tcpProbe.foreground(true);
     }
 
     @Override
     protected void handleOnPause() {
         ssh.setForeground(false);
+        tcpProbe.foreground(false);
         super.handleOnPause();
     }
 
@@ -170,6 +199,7 @@ public class MomoSyncPlugin extends Plugin {
     @Override
     protected synchronized void handleOnDestroy() {
         ssh.destroy();
+        tcpProbe.destroy();
         try { finishBackup(true); } catch (IOException ignored) { }
         super.handleOnDestroy();
     }

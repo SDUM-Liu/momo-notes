@@ -44,11 +44,19 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Verify native TCP probe
+        run: go test ./...
+        working-directory: native/tcp-probe
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: node --test tests/desktop-tcp-probe.cjs
       - name: Verify Ubuntu desktop pairing and read-only sync
         if: matrix.name == 'Ubuntu-x64'
         run: |
@@ -57,6 +65,9 @@ jobs:
           node --test tests/ssh-session.cjs tests/ssh-offer.cjs tests/desktop-ssh-remote.cjs
           npm install --prefix "$RUNNER_TEMP/momo-test" playwright@1.65.1
           npm run build
+          MOMO_BROWSER_CHANNEL=chrome MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" node --test tests/paired-network.cjs tests/tcp-probe-flow.cjs tests/remote-book.cjs tests/remote-book-client.cjs
+          MOMO_BROWSER_CHANNEL=chrome MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" node tests/mobile-book-auth.cjs
+          MOMO_BROWSER_CHANNEL=chrome MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" xvfb-run -a dbus-run-session -- node tests/mobile-remote-book.cjs
           MOMO_LARGE_MEDIA=1 MOMO_BROWSER_CHANNEL=chrome MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" node tests/mobile-media.cjs
           MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" xvfb-run -a dbus-run-session -- node tests/desktop-follower.cjs
           MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" xvfb-run -a dbus-run-session -- node tests/docked-pet.cjs

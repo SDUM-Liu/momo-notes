@@ -248,6 +248,8 @@ function showView(next) {
   }
   if (view === 'browser' && next !== 'browser') void api.hideBrowser()
   if (view === 'sync' && next !== 'sync') {
+    ++testRevision
+    $('sync-test').disabled = false
     if ($('ssh-dialog').open) $('ssh-dialog').close()
     ++qrRequest
     $('sync-qr').hidden = true
@@ -914,7 +916,7 @@ if (api.floatingPet) {
   })
 }
 
-let syncState, qrRequest = 0, stopHostLink, hostLinkRevision = 0, followerView = false
+let syncState, qrRequest = 0, stopHostLink, hostLinkRevision = 0, followerView = false, testRevision = 0
 const syncPathLabel = via => via === 'direct' ? '点对点直连' : via === 'relay' ? '加密中继' : ''
 
 async function connectHostLink() {
@@ -1069,15 +1071,37 @@ $('sync-now').onclick = () => syncAction(() => api.runSync(), $('sync-now'))
 $('sync-test').onclick = async event => {
   const button = event.currentTarget
   const status = $('sync-test-status')
+  const revision = ++testRevision
+  const code = $('sync-pair-code').value
   button.disabled = true
   status.textContent = '正在验证主机连接…'
   try {
-    const path = await api.testSync($('sync-pair-code').value)
-    status.textContent = '已通过' + syncPathLabel(path) + '连通主机，配对码可用。'
+    const path = await api.testSync(code)
+    if (revision !== testRevision) return
+    const route = '当前同步使用' + syncPathLabel(path) + '。'
+    if (!syncState?.enabled || !api.testTcpProbe) {
+      status.textContent = '已通过' + syncPathLabel(path) + '连通主机，配对码可用。'
+      return
+    }
+    status.textContent = route + '两端正在测试 TCP 直连，请保持桃桃在前台。'
+    const result = await api.testTcpProbe(code)
+    if (revision !== testRevision) return
+    const messages = {
+      direct: 'TCP 直连测试成功，双方已直接收发验证数据。',
+      failed: '本次 TCP 直连未打通。',
+      observer_unavailable: '未能获取公网 TCP 端口，本次无法判断是否能直连。',
+      unavailable: '未能完成两端协调，请确认主设备在线后重试。',
+      unsupported: '请将两端更新到支持 TCP 测试的版本。目前支持 Android 和桌面端。',
+      unpaired: '完成与该主设备的配对后，可测试 TCP 直连。',
+      timeout: 'TCP 测试超时，请重试。',
+      busy: '已有直连测试正在进行，请稍后重试。',
+      cancelled: 'TCP 测试已取消。',
+    }
+    status.textContent = route + (messages[result?.status] || messages.unavailable)
   } catch (error) {
-    status.textContent = errorMessage(error)
+    if (revision === testRevision) status.textContent = errorMessage(error)
   } finally {
-    button.disabled = false
+    if (revision === testRevision) button.disabled = false
   }
 }
 $('sync-unpair').onclick = () => syncAction(async () => {

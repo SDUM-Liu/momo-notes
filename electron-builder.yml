@@ -1,5 +1,6 @@
 appId: io.github.sdumliu.momo-notes
 productName: Momo Notes
+afterPack: ./build/tcp-probe.cjs
 directories:
   output: release
 files:

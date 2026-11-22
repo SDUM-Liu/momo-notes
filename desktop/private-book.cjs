@@ -22,7 +22,11 @@ function privateBook(directory) {
     fs.writeFileSync(file + '.tmp', JSON.stringify(box), { mode: 0o600 })
     fs.renameSync(file + '.tmp', file)
   }
-  return { lock, mediaResponse: media.respond, get unlocked() { return Boolean(session) }, call(op, args = {}) {
+  return { lock, mediaResponse: media.respond,
+    get configured() { return fs.existsSync(file) },
+    get unlocked() { return Boolean(session) },
+    keepAlive() { if (session) touch() },
+    call(op, args = {}) {
     if (op === 'lock') { lock(); return }
     if (op === 'begin') {
       lock()

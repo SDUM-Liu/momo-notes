@@ -1,5 +1,6 @@
 import { digest, seal, unseal, wireLimit, pairingCode, relayOrigin, maxPairingLength, transferId } from './sync.mjs'
 import { normalizeSSHShareHint } from './ssh-endpoint.mjs'
+import { isPublicProbeEndpoint } from './tcp-probe.mjs'
 import { noteIdentity, noteKey, localDay, validateCategory, hasContent } from './notes.mjs'
 
 const randomHex = () => transferId() + transferId()
@@ -8,10 +9,59 @@ const revisionOf = doc => digest(JSON.stringify(doc))
 const sshOwner = proof => typeof proof === 'string' && /^[a-f0-9]{64}$/.test(proof)
   ? digest('momo/ssh-hint/' + proof) : null
 
-export function createHostSync({ config = {}, store, ask, notify, codex, update, defaults, relayOverride, persist }) {
+export function createHostSync({ config = {}, store, ask, notify, codex, update, tcpProbe, remoteBook, defaults, relayOverride, persist }) {
   const replay = new Map()
   const lastSeen = new Map()
   const sshOffers = new Map()
+  let pendingProbe
+  function cancelProbe(probe = pendingProbe) {
+    if (!probe || probe !== pendingProbe) return
+    pendingProbe = undefined
+    clearTimeout(probe.timer)
+    void Promise.resolve().then(() => tcpProbe.cancel(probe.id)).catch(() => {})
+  }
+  async function testTcp(op, payload) {
+    if (!tcpProbe) return { ok: false, reason: 'unsupported' }
+    const owner = sshOwner(payload?.device?.sshProof)
+    const device = config.devices?.find(d => d.id === payload?.device?.id)
+    const id = payload?.id
+    if (!owner || device?.sshOwner !== owner || typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    if (op === 'tcp-probe-prepare') {
+      if (pendingProbe) return { ok: false, reason: 'busy' }
+      const probe = { id, device: device.id, phase: 'preparing' }
+      pendingProbe = probe
+      probe.timer = setTimeout(() => cancelProbe(probe), 75000)
+      try {
+        const result = await tcpProbe.prepare(id)
+        if (probe !== pendingProbe) return { ok: false, reason: 'cancelled' }
+        if (!isPublicProbeEndpoint(result?.endpoint)) {
+          cancelProbe(probe)
+          return { ok: false, reason: result?.reason || 'observer_unavailable' }
+        }
+        probe.phase = 'ready'
+        return { endpoint: result.endpoint }
+      } catch (error) {
+        cancelProbe(probe)
+        return { ok: false, reason: error?.code || 'observer_unavailable' }
+      }
+    }
+    const probe = pendingProbe
+    if (!probe || probe.id !== id || probe.device !== device.id) return { ok: false, reason: 'expired' }
+    if (op === 'tcp-probe-cancel') { cancelProbe(probe); return { ok: true } }
+    if (op !== 'tcp-probe-run' || probe.phase !== 'ready' ||
+        !isPublicProbeEndpoint(payload.endpoint) || typeof payload.token !== 'string' || !/^[a-f0-9]{64}$/.test(payload.token)) {
+      return { ok: false, reason: 'unavailable' }
+    }
+    probe.phase = 'running'
+    try {
+      const result = await tcpProbe.run(id, payload.endpoint, payload.token)
+      if (pendingProbe !== probe) return { ok: false, reason: 'cancelled' }
+      return result?.ok === true ? { ok: true } : { ok: false, reason: result?.reason || 'unavailable' }
+    } catch { return { ok: false, reason: 'unavailable' } }
+    finally { cancelProbe(probe) }
+  }
   function recordDevice(value) {
     if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value?.id) ||
         !['Android','iPhone','iPad','Windows','Mac','Linux','设备'].includes(value.platform)) return
@@ -198,7 +248,15 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
         if (request.op === 'ask' && ask) value = await ask(request.payload)
         else if (codex && request.op.startsWith('codex/')) value = await codex(request.op.slice(6), request.payload)
         else throw new Error('手机作为主设备时，桃桃 AI 不可用')
-      } else if (request.op?.startsWith?.('update/') && update) value = await update(request.op.slice(7), request.payload)
+      } else if (request.op?.startsWith?.('private-book/')) {
+        if (!remoteBook) throw new Error('请在保存私密便签的电脑上开启主设备同步')
+        const payload = request.payload
+        const owner = sshOwner(payload?.device?.sshProof)
+        const device = config.devices?.find(d => d.id === payload?.device?.id)
+        if (!owner || device?.sshOwner !== owner) throw new Error('无法验证本设备，请先完成一次同步')
+        value = await remoteBook.call(device.id, request.op.slice(13), payload)
+      } else if (request.op?.startsWith?.('tcp-probe-')) value = await testTcp(request.op, request.payload)
+      else if (request.op?.startsWith?.('update/') && update) value = await update(request.op.slice(7), request.payload)
       else value = await enqueue(() => {
         if (!enabled() || config.key !== key) throw new Error('主设备已停止同步')
         return processRequest(request)
@@ -230,6 +288,8 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       unlock()
     }
     sshOffers.clear()
+    cancelProbe()
+    remoteBook?.revoke()
     statuses.clear()
     config.enabled = Boolean(value)
     persist()
@@ -282,7 +342,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       }
       return state()
     },
-    stop: unlock,
+    stop() { unlock(); cancelProbe(); remoteBook?.revoke() },
     code() {
       if (!enabled() || status() !== 'online') throw new Error('请先等待主机连上异地同步服务')
       const fallback = backup()
@@ -293,6 +353,8 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       config.devices = []
       lastSeen.clear()
       sshOffers.clear()
+      cancelProbe()
+      remoteBook?.revoke()
       config.key = randomHex()
       config.owner = randomHex()
       persist()
