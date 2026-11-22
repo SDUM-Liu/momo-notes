@@ -20,6 +20,7 @@ export function wireHandoff(api, flush, refreshHost) {
     if (sending) return
     sending = true; $('send').disabled = true
     const channel = mobileSyncLink()
+    let abortTransfer
     try {
       const code = resume?.code || $('code').value.trim(), dest = parsePairing(code)
       const request = async (op, data = {}) => {
@@ -36,6 +37,7 @@ export function wireHandoff(api, flush, refreshHost) {
         const hello = await request('hello')
         const info = await api.handoff('prepare', code, hello.proof, hello.mediaVersion)
         checksum = info.checksum
+        abortTransfer = () => request('abort', {checksum})
         for (let index = 0; index < info.count; index++) {
           status('正在传输 ' + (index + 1) + ' / ' + info.count)
           await request('chunk', { index, checksum, chunk: await api.handoff('chunk', index) })
@@ -55,6 +57,7 @@ export function wireHandoff(api, flush, refreshHost) {
         }
         if (staged.staged !== checksum) throw new Error('目标设备校验失败')
         await flush()
+        abortTransfer = undefined
         await api.handoff('cutover', code, checksum)
         await refreshHost()
       }
@@ -62,7 +65,10 @@ export function wireHandoff(api, flush, refreshHost) {
       if (!applied.done || applied.checksum !== checksum) throw new Error('新主设备尚未确认')
       status('新主设备已接管，正在重启')
       await api.handoff('finish', checksum)
-    } catch (e) { status(e.message) } finally { channel.close(); sending = false; $('send').disabled = false }
+    } catch (error) {
+      status(error.message)
+      if (abortTransfer) await abortTransfer().catch(() => {})
+    } finally { channel.close(); sending = false; $('send').disabled = false }
   }
   $('send').onclick = async () => send(await api.handoff('pending'))
   void api.handoff('target').then(listen).catch(e => status(e.message))

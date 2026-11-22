@@ -36,6 +36,15 @@ function handoff({ root, directory, sync, follower, snapshot, credentials, resta
     write(receiving, rx)
     return target()
   }
+  function discardIncoming() {
+    for (const id of [rx.building, rx.staged]) {
+      if (id && migration.activePath(root) !== path.join(root, id)) migration.discard(root, id)
+    }
+    delete rx.building; delete rx.staged; delete rx.checksum; delete rx.incoming
+    incomingMedia = undefined
+    fs.rmSync(path.join(root, 'handoff-part.enc'), { force: true })
+    write(receiving, rx)
+  }
   async function receive(wire) {
     if (!rx) return null
     const { key, room } = rx.link
@@ -53,11 +62,7 @@ function handoff({ root, directory, sync, follower, snapshot, credentials, resta
               typeof req.chunk !== 'string' || req.chunk.length > chunkSize || !req.chunk.length) throw new Error('无效的数据分块')
           const file = path.join(root, 'handoff-part.enc')
           if (req.index === 0) {
-            if (rx.building) {
-              migration.discard(root, rx.building)
-              delete rx.building; incomingMedia = undefined
-            }
-            delete rx.staged; delete rx.checksum; write(receiving, rx)
+            discardIncoming()
             fs.writeFileSync(file, '', { mode: 0o600 }); rx.next = 0; rx.incoming = req.checksum }
           if (rx.incoming !== req.checksum || req.index !== rx.next) throw new Error('分块顺序有误，请重新传输')
           fs.appendFileSync(file, req.chunk); rx.next++; result = true
@@ -77,6 +82,9 @@ function handoff({ root, directory, sync, follower, snapshot, credentials, resta
             rx.staged = id; rx.checksum = req.checksum; write(receiving, rx)
             result = { staged: rx.checksum }
           }
+        } else if (req.op === 'abort' && (req.checksum === rx.incoming || req.checksum === rx.checksum) && req.checksum) {
+          discardIncoming()
+          result = true
         } else if (req.op === 'mediaChunk' && incomingMedia && req.checksum === rx.incoming) {
           await incomingMedia.write(req.fileId, req.index, decodeBlock(req.bytes))
           result = true
@@ -122,7 +130,8 @@ function handoff({ root, directory, sync, follower, snapshot, credentials, resta
       if (!tx || tx.directory !== directory || !tx.checksum || tx.checksum !== sum) throw new Error('迁移状态不符')
       sourceMedia.clear()
       fs.rmSync(path.join(directory, 'private-book.enc'), { force: true })
-      fs.unlinkSync(outgoing); tx = undefined; restart() },
+      fs.unlinkSync(outgoing); tx = undefined; restart()
+    },
   }
 }
 module.exports = { handoff }

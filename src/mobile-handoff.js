@@ -13,6 +13,13 @@ export function mobileHandoff({ get, put, secure, pair, snapshot, stage, activat
     if (!rx || (rx.done && Date.now() - rx.done > 86400000)) return null
     return { ...rx.link, code: pairingCode(rx.link.relay,rx.link.room,rx.link.key) }
   }
+  async function discardIncoming(rx) {
+    for (const prefix of [rx.building, rx.staged]) if (prefix) await discard?.(prefix)
+    for (let i = 0; i < nextIndex; i++) await put('transfer-part/' + i, null)
+    delete rx.building; delete rx.staged; delete rx.sum
+    incomingMedia = undefined; incoming = undefined; nextIndex = 0
+    await secure.set('handoff-receive', rx)
+  }
   async function receive(wire) {
     const rx = await secure.get('handoff-receive')
     if (!rx) return null
@@ -29,9 +36,8 @@ export function mobileHandoff({ get, put, secure, pair, snapshot, stage, activat
         else if (r.op === 'chunk') {
           if (typeof r.chunk !== 'string' || r.chunk.length > chunkSize || !Number.isInteger(r.index) || r.index < 0 || r.index >= 2048) throw new Error('数据块无效')
           if (!r.index) {
-            if (rx.building) { await discard(rx.building); delete rx.building; incomingMedia = undefined }
-            delete rx.staged; delete rx.sum; await secure.set('handoff-receive',rx)
-            nextIndex = 0; incoming = r.checksum
+            await discardIncoming(rx)
+            incoming = r.checksum
           }
           if (nextIndex !== r.index || incoming !== r.checksum) throw new Error('请重新传输')
           await put('transfer-part/' + r.index, r.chunk); nextIndex++; result = true
@@ -52,6 +58,9 @@ export function mobileHandoff({ get, put, secure, pair, snapshot, stage, activat
             rx.staged = staged; rx.sum = r.checksum; await secure.set('handoff-receive',rx)
             result = { staged: rx.sum }
           }
+        } else if (r.op === 'abort' && (r.checksum === incoming || r.checksum === rx.sum) && r.checksum) {
+          await discardIncoming(rx)
+          result = true
         } else if (r.op === 'mediaChunk' && incomingMedia && r.checksum === incoming) {
           await incomingMedia.write(r.fileId, r.index, decodeBlock(r.bytes))
           result = true

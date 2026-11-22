@@ -63,12 +63,15 @@ async function test() {
     await editor.locator('input[type=checkbox]').waitFor()
     await editor.click()
     await page.keyboard.insertText('ordinary-marker')
-    await page.locator('#settings').click()
-    await page.locator('#project-issues').dragTo(page.locator('#project-repo'))
-    await page.locator('#book-password').fill(password)
-    await page.locator('#book-code').fill(token(secret, Math.floor(Date.now() / 30000)))
-    await page.locator('#book-auth button').click()
-    await editor.getByText('旧的已完成文字', { exact: true }).waitFor()
+    async function unlock(offset = 0) {
+      await page.locator('#settings').click()
+      await page.locator('#project-issues').dragTo(page.locator('#project-repo'))
+      await page.locator('#book-password').fill(password)
+      await page.locator('#book-code').fill(token(secret, Math.floor(Date.now() / 30000) + offset))
+      await page.locator('#book-auth button').click()
+      await editor.getByText('旧的已完成文字', { exact: true }).waitFor()
+    }
+    await unlock()
     assert(await page.locator('#question').isDisabled())
     assert(await page.locator('#note-date-line').isHidden())
     assert.equal(await editor.locator('input[type=checkbox], [data-checked], s, del').count(), 0)
@@ -246,6 +249,20 @@ async function test() {
       const ordinary = fs.readFileSync(path.join(profile, 'notes', name), 'utf8')
       assert(!ordinary.includes('private-marker') && !ordinary.includes('旧录音'))
     }
+    // A forced lock while the user is deciding must drop the selection and
+    // remove the private filename without uploading anything.
+    await unlock(1)
+    await attachFromText(largeFile)
+    await prompt.waitFor()
+    const beforeLock = fs.readdirSync(mediaDir).sort()
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+      try { document.dispatchEvent(new Event('visibilitychange')) } finally { delete document.hidden }
+    })
+    await page.locator('#book-return').waitFor({ state: 'hidden' })
+    assert(await prompt.isHidden())
+    assert.equal(await page.locator('#drive-import-detail').textContent(), '')
+    assert.deepEqual(fs.readdirSync(mediaDir).sort(), beforeLock)
     console.log('PASS private home and archive, task conversion, native previews, 34 MiB upload with cross-chunk and tail byte ranges, cancellation, ENOSPC recovery, deletion and lock isolation')
   } finally {
     await app.close()
