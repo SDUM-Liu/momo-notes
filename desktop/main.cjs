@@ -2,7 +2,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, screen, session, dialog, native
 const path = require('node:path')
 const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
-const { fit, position, center, nearestEdge } = require('./window.cjs')
+const { dock, face, fit, position, nearestEdge } = require('./window.cjs')
 const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
 const { desktopUpdateSource } = require('./update-source.cjs')
@@ -25,6 +25,7 @@ if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.r
 
 let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, browser, sync, follower, codex
 let mode = 'pet'
+let hoverTimer
 let quitting = false
 let asking = false
 
@@ -43,6 +44,7 @@ function syncState() {
 }
 
 function setMode(next, activate = true) {
+  clearInterval(hoverTimer)
   mode = next
   if (mode !== 'note') browser?.hide()
   win.setBounds(position(mode, currentArea(anchor), anchor, edge))
@@ -54,7 +56,18 @@ function setMode(next, activate = true) {
 }
 
 function toggle() {
-  setMode(mode === 'note' ? 'pet' : 'note')
+  setMode(mode === 'note' ? edge ? 'edge' : 'pet' : 'note')
+}
+
+function revealDockedPet() {
+  if (mode !== 'edge' || !edge || drag) return
+  setMode('pet', false)
+  hoverTimer = setInterval(() => {
+    if (drag) return
+    const p = screen.getCursorScreenPoint()
+    const b = win.getBounds()
+    if (p.x < b.x || p.y < b.y || p.x >= b.x + b.width || p.y >= b.y + b.height) setMode('edge', false)
+  }, 80)
 }
 
 function refreshDay() {
@@ -191,6 +204,7 @@ function registerIPC() {
     }[target]
     if (typeof url === 'string') return shell.openExternal(url)
   })
+  on('window:edge-hover', revealDockedPet)
   on('window:drag-start', () => {
     drag = { start: screen.getCursorScreenPoint(), bounds: win.getBounds(), moved: false }
   })
@@ -201,13 +215,16 @@ function registerIPC() {
     const dy = point.y - drag.start.y
     if (Math.hypot(dx, dy) < 5 && !drag.moved) return
     drag.moved = true
-    win.setBounds(fit({ ...drag.bounds, x: drag.bounds.x + dx, y: drag.bounds.y + dy }, currentArea(point)))
+    const area = currentArea(point)
+    const bounds = fit({ ...drag.bounds, x: drag.bounds.x + dx, y: drag.bounds.y + dy }, area)
+    win.setBounds(store.data.settings.snap ? dock(bounds, area, nearestEdge(bounds, area)) : bounds)
   })
   on('window:drag-cancel', () => {
     if (drag) win.setBounds(drag.bounds)
     drag = null
   })
   on('window:drag-end', () => {
+    if (!drag) return
     const moved = drag?.moved
     drag = null
     if (!moved) {
@@ -217,16 +234,14 @@ function registerIPC() {
     const bounds = win.getBounds()
     const area = currentArea(screen.getCursorScreenPoint())
     edge = store.data.settings.snap ? nearestEdge(bounds, area) : null
-    anchor = mode === 'note' && !edge ? { x: bounds.x + bounds.width - 57, y: bounds.y + 68 } : center(bounds)
+    anchor = face(mode, bounds)
     if (edge) {
-      // Keep the handle next to the pointer when a larger note is docked.
-      anchor = screen.getCursorScreenPoint()
       setMode('edge', false)
     } else {
       setMode(mode === 'edge' ? 'pet' : mode, false)
     }
     try {
-      store.update({ position: { anchor, edge } })
+      store.update({ position: { anchor, edge, faceAnchor: true } })
     } catch {
       dialog.showErrorBox('桃桃便签', '窗口位置无法保存，请检查本地存储。')
     }
@@ -288,12 +303,16 @@ function registerIPC() {
     try {
       if (openAtLogin !== previousLogin) setOpenAtLogin(openAtLogin)
       if (opensAtLogin() !== openAtLogin) throw new Error('系统未接受开机启动设置')
-      store.update({ settings })
+      store.update({ settings, ...(!snap && edge ? { position: { anchor, edge: null, faceAnchor: true } } : {}) })
     } catch (error) {
       if (openAtLogin !== previousLogin) setOpenAtLogin(previousLogin)
       throw error
     }
     win.setAlwaysOnTop(alwaysOnTop)
+    if (!snap && edge) {
+      edge = null
+      setMode(mode === 'edge' ? 'pet' : mode, false)
+    }
     updates.setAutomatic(settings.autoInstallUpdates)
     syncState()
     return publicSettings()
@@ -309,11 +328,14 @@ function start() {
   const previous = store.data.position
   anchor = previous?.anchor ?? { x: area.x + area.width - 88, y: area.y + Math.round(area.height * 0.66) }
   const usableArea = currentArea(anchor)
-  anchor = center(position('pet', usableArea, anchor))
+  if (previous?.anchor && !previous.faceAnchor && !previous.edge) anchor = { ...anchor, y: anchor.y - 37 }
+  edge = store.data.settings.snap && ['left','right','top','bottom'].includes(previous?.edge) ? previous.edge : null
+  mode = edge ? 'edge' : 'pet'
+  anchor = face(mode, position(mode, usableArea, anchor, edge))
 
   const icon = path.join(__dirname, '../build/icon.png')
   win = new BrowserWindow({
-    ...position('pet', usableArea, anchor),
+    ...position(mode, usableArea, anchor, edge),
     title: '桃桃便签',
     icon,
     transparent: true,
@@ -369,9 +391,9 @@ function start() {
   win.on('close', event => {
     if (quitting) return
     event.preventDefault()
-    setMode('pet', false)
+    setMode(edge ? 'edge' : 'pet', false)
   })
-  win.on('closed', browser.dispose)
+  win.on('closed', () => { clearInterval(hoverTimer); browser.dispose() })
   win.loadFile(path.join(__dirname, '../dist/index.html'))
 
   tray = new Tray(nativeImage.createFromPath(icon).resize({ width: 32, height: 32 }))
@@ -385,7 +407,7 @@ function start() {
     { label: '退出桃桃便签', click: () => app.quit() },
   ]))
   for (const event of ['display-removed', 'display-metrics-changed']) {
-    screen.on(event, () => setMode(mode, false))
+    screen.on(event, () => setMode(edge && mode === 'pet' ? 'edge' : mode, false))
   }
   dayTimer = setInterval(refreshDay, 5000)
   powerMonitor.on('resume', refreshDay)

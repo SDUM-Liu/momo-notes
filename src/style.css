@@ -26,7 +26,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: grid; place-items: center; user-select: none;
 }
 .mascot img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-body[data-mode="pet"] .mascot { padding: 3px 8px; }
+body[data-mode="pet"] .mascot { padding: 3px 2px; }
 body[data-mode="edge"] .mascot {
   background: #fff1ec; border: 1px solid #fffbf6; border-radius: 16px; padding: 4px;
 }
@@ -368,11 +368,17 @@ html[data-momo-floating="true"] body[data-platform="mobile"] .panel {
   box-shadow: 0 1px 5px #42253844;
 }
 html[data-momo-floating="true"] body[data-platform="mobile"][data-mode="note"] .mascot {
-  display: grid; inset: 0 10px auto auto; width: 49px; height: 54px;
+  display: grid; inset: 0 10px auto auto; width: 40px; height: 40px;
 }
 body[data-platform="mobile"] .top { padding-right: 12px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .top { padding-right: 53px; }
 html[data-momo-floating="true"] body[data-platform="mobile"] .foot { padding-right: 35px; }
+@media (prefers-reduced-motion: no-preference) {
+  body[data-mode="note"] .panel { animation: open-note 150ms ease-out; transform-origin: top right; }
+  html[data-momo-floating="true"] body[data-mode="note"] .panel { animation-name: open-floating-note; }
+  @keyframes open-note { from { opacity: .65; scale: .985; } }
+  @keyframes open-floating-note { from { opacity: .65; scale: .98; } }
+}
 body[data-platform="mobile"] :is(input, select, textarea, .tiptap) { font-size: 16px; }
 body[data-platform="mobile"] .link-form { top: 133px; }
 body[data-platform="mobile"] :is(.chat-head .quiet, .chat-send) { min-height: 42px; min-width: 42px; }

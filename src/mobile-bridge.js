@@ -232,6 +232,7 @@ export function createMobileBridge() {
   }
   const syncLink = mobileSyncLink(connection => sync.disconnected(connection), diagnoseSync)
   const sync = mobileSync({
+    editing: () => document.activeElement?.isContentEditable === true,
     exchange: syncLink.exchange,
     loadCode: () => native && !hostSelected ? SecureStorage.getItem('sync-pair').catch(() => null) : Promise.resolve(null),
     saveCode: code => {
@@ -264,7 +265,7 @@ export function createMobileBridge() {
       onNotes({ locked: value.locked })
     },
   })
-  const backgroundSync = () => sync.run().catch(noop)
+  const backgroundSync = () => sync.run(true).catch(noop)
   const init = ready.then(async db => {
     settings = { ...settings, ...await transaction(db, 'settings', false, store => store.get('user')) }
     hostSelected = Boolean(await transaction(db, 'settings', false, store => store.get('primary-role')))
@@ -385,6 +386,7 @@ export function createMobileBridge() {
       return result
     },
     runSync: sync.run,
+    editorIdle: backgroundSync,
     async codex(...args) {
       if (hostSelected) throw new Error('手机作为主设备时，桃桃 AI 不可用')
       return sync.codex(...args)

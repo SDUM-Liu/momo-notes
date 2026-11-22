@@ -1,4 +1,4 @@
-const sizes = { pet: [102, 148], edge: [57, 67] }
+const sizes = { pet: [74, 148], edge: [74, 72] }
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value))
 
 function fit(bounds, area) {
@@ -27,24 +27,25 @@ function nearestEdge(bounds, area) {
   return distance <= 16 ? edge : null
 }
 
-function position(mode, area, anchor, edge) {
-  const [width, height] = dimensions(mode, area)
-  const bounds = { width, height, x: anchor.x - width / 2, y: anchor.y - height / 2 }
-  if (mode === 'note') {
-    bounds.x = anchor.x - width + 57
-    bounds.y = anchor.y - 68
-  }
-  if (mode === 'edge') {
-    if (edge === 'left') bounds.x = area.x
-    if (edge === 'right') bounds.x = area.x + area.width - width
-    if (edge === 'top') bounds.y = area.y
-    if (edge === 'bottom') bounds.y = area.y + area.height - height
-  }
+function dock(bounds, area, edge) {
+  bounds = { ...bounds }
+  if (edge === 'left') bounds.x = area.x
+  if (edge === 'right') bounds.x = area.x + area.width - bounds.width
+  if (edge === 'top') bounds.y = area.y
+  if (edge === 'bottom') bounds.y = area.y + area.height - bounds.height
   return fit(bounds, area)
 }
 
-function center(bounds) {
-  return { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) }
+// The eye line is the common anchor in the three illustrations (CSS pixels).
+function face(mode, bounds) {
+  return { x: bounds.x + (mode === 'note' ? bounds.width - 46 : Math.round(bounds.width / 2)),
+    y: bounds.y + 37 }
 }
 
-module.exports = { center, fit, nearestEdge, position }
+function position(mode, area, anchor, edge) {
+  const [width, height] = dimensions(mode, area)
+  const offset = face(mode, { x: 0, y: 0, width })
+  return dock({ width, height, x: anchor.x - offset.x, y: anchor.y - offset.y }, area, mode === 'note' ? null : edge)
+}
+
+module.exports = { dock, face, fit, nearestEdge, position }

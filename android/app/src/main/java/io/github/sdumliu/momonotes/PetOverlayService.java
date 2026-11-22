@@ -55,7 +55,9 @@ public class PetOverlayService extends Service {
 
     static boolean dismissNote() {
         if (!isNoteOpen()) return false;
+        running.note.alignPet(running.position);
         running.note.close();
+        running.windows.updateViewLayout(running.pet, running.position);
         running.refreshVisibility();
         return true;
     }
@@ -75,8 +77,15 @@ public class PetOverlayService extends Service {
     }
 
     private void refreshVisibility() {
-        if (pet != null) pet.setVisibility(editorVisible || scannerVisible || (note != null && note.isOpen())
-            ? View.GONE : View.VISIBLE);
+        if (pet == null) return;
+        int next = editorVisible || scannerVisible || (note != null && note.isOpen()) ? View.GONE : View.VISIBLE;
+        if (pet.getVisibility() == next) return;
+        pet.animate().cancel();
+        pet.setVisibility(next);
+        if (next == View.VISIBLE && android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            pet.setAlpha(.6f);
+            pet.animate().alpha(1f).setDuration(150).start();
+        } else pet.setAlpha(1f);
     }
 
     @Override
@@ -151,7 +160,8 @@ public class PetOverlayService extends Service {
         position.y = getPreferences().getInt("y", dp(128));
         clampPosition(windows, position);
         pet.setOnTouchListener(dragWindow(windows, pet, position, () ->
-            getPreferences().edit().putInt("x", position.x).putInt("y", position.y).apply()));
+            getPreferences().edit().putInt("x", position.x).putInt("y", position.y)
+                .remove("note-x").remove("note-y").apply()));
         refreshVisibility();
         windows.addView(pet, position);
     }
@@ -162,7 +172,7 @@ public class PetOverlayService extends Service {
 
     private void openNote(MainActivity activity) {
         try {
-            note.open(activity);
+            note.open(activity, position);
             refreshVisibility();
         } catch (RuntimeException error) {
             Log.w("MomoPet", "Cannot open floating note", error);

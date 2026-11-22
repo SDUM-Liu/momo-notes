@@ -1,12 +1,14 @@
 import { parsePairing, seal, unseal, wireLimit } from '../shared/sync.mjs'
 
 export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change,
-  readOnly = false, reconcile = () => {} }) {
+  readOnly = false, reconcile = () => {}, editing = () => false }) {
   let pair, running, probing, switching, verified = false, peerLocked = true, last = '', error = ''
   let via
+  let transferring = false
+  let deferred = false
   const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), via, last, error,
     ...(readOnly && { syncing: Boolean(running || switching || (pair && !verified && !error)) }),
-    locked: readOnly || !pair || !verified || Boolean(running || switching || peerLocked) })
+    locked: readOnly || !pair || !verified || Boolean(transferring || switching || peerLocked) })
   async function request(connection, op, payload, token) {
     const bytes = crypto.getRandomValues(new Uint8Array(12))
     const id = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
@@ -49,11 +51,16 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     return probing
   }
 
-  async function run() {
+  async function run(background = false) {
     if (!pair) return state()
-    if (running) { await running; return state() }
+    if (running) {
+      await running
+      if (deferred && (!background || !editing())) return run(background)
+      return state()
+    }
     if (switching) return state()
     const connection = pair
+    deferred = false
     running = (async () => {
       let token
       try {
@@ -64,14 +71,17 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         const extra = readOnly ? [] : categories().filter(item => !known.has(item.id))
         const dirty = !readOnly && Object.values(records).some(record => record.dirty)
         const outdated = Object.entries(snapshot.revisions).some(([key, rev]) => records[key]?.rev !== rev)
-        await setCategories(snapshot.categories)
         if (!extra.length && !dirty && !outdated) {
+          await setCategories(snapshot.categories)
           if (readOnly) await reconcile(snapshot.revisions)
           verified = true
           last = new Date().toISOString()
           error = ''
           return
         }
+        if (background && verified && editing()) { deferred = true; return }
+        transferring = true
+        change(state())
         const response = await request(connection, 'begin', extra)
         token = response.token
         await setCategories(response.categories)
@@ -108,6 +118,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         throw failure
       } finally {
         if (token) await request(connection, 'finish', undefined, token).catch(() => {})
+        transferring = false
         running = null
         change(state())
       }

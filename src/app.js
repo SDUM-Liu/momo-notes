@@ -48,6 +48,8 @@ const visited = new Map()
 let editGeneration = 0
 let readOnly = false
 let retryOnUnlock = false
+let composingEdit = false
+let pendingNoteChange
 
 function errorMessage(error) {
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -101,8 +103,14 @@ function drawState(value) {
     $('mobile-dismiss').hidden = state.mode !== 'note'
     $('mobile-open').hidden = state.mode === 'note'
   }
-  $('mascot-image').src = state.mode === 'note' ? perch : state.mode === 'edge' ? state.settings.edgeImage || defaultEdge : pet
-  $('mascot-image').classList.toggle('custom', Boolean(state.settings.edgeImage))
+  const image = $('mascot-image')
+  const pose = state.mode === 'note' ? perch : state.mode === 'edge' ? state.settings.edgeImage || defaultEdge : pet
+  if (image.getAttribute('src') !== pose) image.setAttribute('src', pose)
+  image.classList.toggle('custom', state.mode === 'edge' && Boolean(state.settings.edgeImage))
+  if (wasMode && wasMode !== state.mode && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    $('mascot').animate([{ opacity: 0.55, translate: '0 3px' }, { opacity: 1, translate: '0 0' }],
+      { duration: 150, easing: 'ease-out' })
+  }
   mascotLabel()
   if (wasMode !== 'note' && state.mode === 'note') {
     showView('note')
@@ -208,6 +216,10 @@ function saveDocument(doc) {
 }
 
 async function saveBeforeSwitch() {
+  if (composingEdit && editor && currentDate) {
+    composingEdit = false
+    saveDocument(editor.getJSON())
+  }
   await saveQueue
   if (previousSaveError && editor && currentDate) {
     saveDocument(editor.getJSON())
@@ -248,10 +260,13 @@ function wireDrag(element, click) {
     return
   }
   let active = false
+  let pointerToggle = false
   let pointer
   element.addEventListener('pointerdown', event => {
     if (event.button !== 0 || active) return
+    pointerToggle = false
     if (element === $('mascot') && state.mode === 'note') return
+    pointerToggle = true
     active = true
     pointer = event.pointerId
     element.setPointerCapture(pointer)
@@ -272,11 +287,18 @@ function wireDrag(element, click) {
   })
   if (click) {
     element.addEventListener('click', event => {
-      if (state.mode === 'note' || event.detail === 0) click()
+      if (!pointerToggle || event.detail === 0) click()
     })
   }
 }
 
+if (!api.mobile) {
+  const hover = event => {
+    if (event.pointerType === 'mouse' && !event.buttons && state?.mode === 'edge') api.edgeHover()
+  }
+  $('mascot').addEventListener('pointerenter', hover)
+  $('mascot').addEventListener('pointermove', hover)
+}
 wireDrag($('mascot'), () => {
   if (state.mode === 'note' && view === 'browser') showView('note')
   else if (api.mobile) void dismissMobile()
@@ -1060,16 +1082,23 @@ async function init() {
     },
     onUpdate: ({ editor }) => {
       drawProgress()
-      if (currentDate) saveDocument(editor.getJSON())
+      if (!currentDate) return
+      composingEdit = api.mobile && editor.view.composing
+      if (!composingEdit) saveDocument(editor.getJSON())
     },
     onSelectionUpdate: () => { if (editor) drawProgress() },
   })
   api.onState(drawState)
+  if (api.editorIdle) editor.view.dom.addEventListener('blur', () => {
+    setTimeout(() => { void saveQueue.then(() => api.editorIdle()) }, 0)
+  })
   api.onUpdate(drawUpdate)
   api.onBrowser(drawBrowser)
-  api.onNotes(async change => {
+  async function reflectChange(change) {
     if (!state) return
     if (change.profileChanged) {
+      composingEdit = false
+      pendingNoteChange = undefined
       ++profileRevision
       ++editGeneration
       currentDate = undefined
@@ -1119,15 +1148,30 @@ async function init() {
     }
     const generation = editGeneration
     const request = pageRequest
-    if (editor.view.composing) return
+    if (editor.view.composing) { pendingNoteChange = change; return }
     await saveQueue
     const page = await api.openNote(currentDate, category).catch(() => null)
-    if (!page || previousSaveError || generation !== editGeneration || request !== pageRequest || editor.view.composing) return
+    if (!page || previousSaveError || generation !== editGeneration || request !== pageRequest) return
+    if (editor.view.composing) { pendingNoteChange = change; return }
     revisions.set(change.key, page.rev)
     if (JSON.stringify(editor.getJSON()) !== JSON.stringify(page.doc)) {
       editor.commands.setContent(page.doc, { emitUpdate: false })
       drawProgress()
     }
+  }
+  api.onNotes(reflectChange)
+  editor.view.dom.addEventListener('compositionend', () => {
+    const date = currentDate, selected = category, profile = profileRevision
+    setTimeout(() => {
+      if (editor.view.composing || profile !== profileRevision || date !== currentDate || selected !== category) return
+      if (composingEdit && currentDate) {
+        composingEdit = false
+        saveDocument(editor.getJSON())
+      }
+      const change = pendingNoteChange
+      pendingNoteChange = undefined
+      if (change) void reflectChange(change)
+    }, 0)
   })
   api.onSync?.(drawSync)
   if (api.syncLink) void connectHostLink().catch(error => { $('sync-status').textContent = errorMessage(error) })

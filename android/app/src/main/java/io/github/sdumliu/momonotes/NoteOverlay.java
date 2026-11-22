@@ -37,7 +37,7 @@ final class NoteOverlay {
 
     boolean isOpen() { return window != null; }
 
-    void open(MainActivity activity) {
+    void open(MainActivity activity, WindowManager.LayoutParams pet) {
         if (isOpen()) return;
         WebView editor = activity.getBridge().getWebView();
         if (!(editor.getParent() instanceof ViewGroup parent)) {
@@ -50,9 +50,10 @@ final class NoteOverlay {
         position.gravity = Gravity.TOP | Gravity.LEFT;
         position.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         sizeWindow();
-        Rect bounds = PetOverlayService.availableSpace(windows);
-        position.x = preferences.getInt("note-x", (bounds.width() - position.width) / 2);
-        position.y = preferences.getInt("note-y", (bounds.height() - position.height) / 3);
+        // Both illustrations use the eyes as their anchor. The perched image is
+        // 40dp wide and inset 10dp from the editor's right edge.
+        position.x = preferences.getInt("note-x", pet.x + pet.width / 2 - position.width + dp(30));
+        position.y = preferences.getInt("note-y", pet.y + dp(20) - dp(23));
         PetOverlayService.clampPosition(windows, position);
 
         webView = editor;
@@ -70,6 +71,14 @@ final class NoteOverlay {
             close();
             throw error;
         }
+    }
+
+    void alignPet(WindowManager.LayoutParams pet) {
+        preferences.edit().putInt("note-x", position.x).putInt("note-y", position.y).apply();
+        pet.x = position.x + position.width - dp(30) - pet.width / 2;
+        pet.y = position.y + dp(23) - dp(20);
+        PetOverlayService.clampPosition(windows, pet);
+        preferences.edit().putInt("x", pet.x).putInt("y", pet.y).apply();
     }
 
     void close() {

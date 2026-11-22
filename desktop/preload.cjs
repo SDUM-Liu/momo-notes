@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('momo', {
   browserBack: invoke('browser:back'),
   toggle: invoke('window:toggle'),
   dragStart: () => ipcRenderer.send('window:drag-start'),
+  edgeHover: () => ipcRenderer.send('window:edge-hover'),
   dragMove: () => ipcRenderer.send('window:drag-move'),
   dragEnd: () => ipcRenderer.send('window:drag-end'),
   cancelDrag: () => ipcRenderer.send('window:drag-cancel'),
