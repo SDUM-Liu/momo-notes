@@ -27,13 +27,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .mascot img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 body[data-mode="pet"] .mascot { padding: 3px 2px; }
-body[data-mode="edge"] .mascot {
-  background: #fff1ec; border: 1px solid #fffbf6; border-radius: 16px; padding: 4px;
-}
-body[data-mode="edge"][data-edge="right"] .mascot { border-radius: 16px 0 0 16px; }
-body[data-mode="edge"][data-edge="left"] .mascot { border-radius: 0 16px 16px 0; }
-body[data-mode="edge"][data-edge="top"] .mascot { border-radius: 0 0 16px 16px; }
-body[data-mode="edge"][data-edge="bottom"] .mascot { border-radius: 16px 16px 0 0; }
+body[data-mode="edge"] .mascot { padding: 5px; }
 body[data-mode="edge"][data-edge="left"] .mascot img:not(.custom) { transform: scaleX(-1); }
 body[data-mode="note"] .mascot {
   inset: 1px 13px auto auto; width: 66px; height: 63px;

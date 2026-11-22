@@ -34,6 +34,11 @@ async function test() {
       screen.getCursorScreenPoint = () => globalThis.cursor
     })
     const pet = page.locator('#mascot')
+    const appearance = await pet.evaluate(button => {
+      const style = getComputedStyle(button)
+      return { fill: style.backgroundColor, border: style.borderTopWidth }
+    })
+    assert.deepEqual(appearance, { fill: 'rgba(0, 0, 0, 0)', border: '0px' })
     await pet.dispatchEvent('pointerenter', { pointerType: 'mouse' })
     await mode('pet')
     await app.evaluate(() => { globalThis.cursor.x += 150 })
