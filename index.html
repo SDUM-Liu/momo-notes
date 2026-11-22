@@ -243,7 +243,7 @@
                     <li>运行 <code>whoami</code> 查看用户名，填到上方。Termux 默认端口为 <code>8022</code>，如已修改，请填实际值。</li>
                   </ol>
                 </div>
-                <p>通常需连接同一局域网，或填写主设备能直接访问的地址。同步中继不转发 SSH 连接。</p>
+                <p>手动直连需要电脑能访问这个地址。手机用流量或在其他网络时，请用上方的「允许一次异地连接」。</p>
               </details>
               <div class="project-links">
                 <button type="submit" class="primary">分享给主设备</button>
@@ -403,7 +403,7 @@
       <label class="ssh-field" id="ssh-alias-field" hidden>SSH 别名<input id="ssh-alias" disabled required maxlength="128" placeholder="这台电脑的 SSH 配置中已有的 Host" autocomplete="off" spellcheck="false"></label>
       <details id="ssh-help"><summary>第一次连接？</summary>
         <p id="ssh-platform-help"></p>
-        <p>使用局域网地址时，让两台设备连同一个 Wi-Fi。异地连接需要电脑能访问的 SSH 地址。手机用流量时，可从设备列表选择「异地连接」。</p>
+        <p>手动直连使用这里填写的地址。通过互联网连接时，在从设备点「允许一次异地连接」，再点电脑设备列表中的「异地连接」。</p>
         <p>第一次连接时，在终端核对目标设备的主机密钥指纹，再按终端提示登录。密码只在系统终端中输入。</p>
       </details>
       <details id="ssh-ai" hidden><summary>桃桃 AI 主机名检查</summary>
