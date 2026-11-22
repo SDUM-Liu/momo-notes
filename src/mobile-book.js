@@ -1,8 +1,9 @@
-import { bytes, base64, keyFor, box, openBox, mac } from './mobile-sealed.js'
+import { bytes, base64, keyFor, box, openBox } from './mobile-sealed.js'
+import { enrollmentInfo, enrollmentLifetime, verify } from '../shared/authenticator.mjs'
 const purpose = 'momo/private-book/v1'
 export function mobileBook(read, write, primary) {
-  let session, seed, nextAttempt = 0, revision = 0, timer
-  function lock() { ++revision; session = seed = undefined; clearTimeout(timer) }
+  let session, enrollment, nextAttempt = 0, revision = 0, timer
+  function lock() { ++revision; session = undefined; clearTimeout(timer) }
   function touch() { clearTimeout(timer); timer = setTimeout(lock, 300000) }
   const save = (s, value) => box(s.key, s.salt, value, purpose).then(write)
   let queue = Promise.resolve()
@@ -11,10 +12,11 @@ export function mobileBook(read, write, primary) {
     if (op === 'begin') {
       lock()
       if (await read()) return {}
-      seed = crypto.getRandomValues(new Uint8Array(20)); touch()
-      const bits = [...seed].map(n => n.toString(2).padStart(8,'0')).join('')
-      const secret = bits.match(/.{5}/g).map(v => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'[parseInt(v,2)]).join('')
-      return { uri: 'otpauth://totp/Momo:Private?issuer=Momo&digits=6&period=30&secret=' + secret }
+      if (!enrollment || Date.now() >= enrollment.expires) {
+        enrollment = { seed: crypto.getRandomValues(new Uint8Array(20)), label: 'Private-' + crypto.randomUUID().slice(0,8).toUpperCase(),
+          expires: Date.now() + enrollmentLifetime }
+      }
+      return enrollmentInfo(enrollment.seed, enrollment.label, enrollment.expires)
     }
     if (op === 'unlock') {
       if (Date.now() < nextAttempt) throw new Error('请稍后再试')
@@ -23,23 +25,15 @@ export function mobileBook(read, write, primary) {
       let s
       if (stored) s = await openBox(args.password, stored, purpose)
       else {
-        if (!seed) throw new Error('请重新扫码绑定')
+        if (!enrollment || Date.now() >= enrollment.expires) throw new Error('绑定二维码已过期，请关闭后重开并扫描新二维码')
         const salt = crypto.getRandomValues(new Uint8Array(16))
-        s = { salt, key: await keyFor(args.password, salt), value: { secret: base64(seed), last: -1, entries: [] } }
+        s = { salt, key: await keyFor(args.password, salt), value: { secret: base64(enrollment.seed), last: -1, entries: [] } }
       }
-      const now = Math.floor(Date.now()/30000)
-      for (const n of [now, now-1, now+1]) {
-        if (n <= s.value.last) continue
-        const input = new Uint8Array(8); new DataView(input.buffer).setBigUint64(0, BigInt(n))
-        const h = await mac(bytes(s.value.secret), input, 'SHA-1')
-        const numeric = (new DataView(h.buffer).getUint32(h[19] & 15) & 0x7fffffff) % 1000000
-        if (String(numeric).padStart(6,'0') !== args.code) continue
-        if (version !== revision || !primary()) throw new Error('已锁定')
-        s.value.last = n; await save(s, s.value)
-        if (version !== revision || !primary()) throw new Error('已锁定')
-        session = s; seed = undefined; touch(); return s.value.entries
-      }
-      throw new Error('验证码无效或已经使用')
+      s.value.last = verify(bytes(s.value.secret), args.code, s.value.last)
+      if (version !== revision || !primary()) throw new Error('已锁定')
+      await save(s, s.value)
+      if (version !== revision || !primary()) throw new Error('已锁定')
+      enrollment?.seed.fill(0); enrollment = undefined; session = s; touch(); return s.value.entries
     }
     if (op !== 'save' || !session || !Array.isArray(args.entries)) throw new Error('请重新验证')
     if (new Blob([JSON.stringify(args.entries)]).size > 128 * 1024 * 1024) throw new Error('超过 128 MB 上限')
@@ -47,7 +41,7 @@ export function mobileBook(read, write, primary) {
     if (session === s) touch()
   }
   return (op, args) => {
-    if (op === 'background') { if (session || !seed) lock(); else ++revision; return Promise.resolve() }
+    if (op === 'background') { if (session || !enrollment) lock(); else ++revision; return Promise.resolve() }
     if (op === 'lock') { lock(); return Promise.resolve() }
     const next = queue.then(() => operation(op,args)); queue = next.catch(() => {}); return next
   }

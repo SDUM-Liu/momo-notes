@@ -3,31 +3,15 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { derive, encrypt, decrypt } = require('./sealed.cjs')
 const purpose = 'momo/private-book/v1'
-const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-
-function base32(bytes) {
-  let bits = 0, value = 0, result = ''
-  for (const byte of bytes) {
-    value = (value << 8) | byte
-    bits += 8
-    while (bits >= 5) { bits -= 5; result += alphabet[(value >>> bits) & 31] }
-  }
-  if (bits) result += alphabet[(value << (5 - bits)) & 31]
-  return result
-}
-function token(secret, counter) {
-  const buf = Buffer.alloc(8)
-  buf.writeBigUInt64BE(BigInt(counter))
-  const h = crypto.createHmac('sha1', Buffer.from(secret, 'base64')).update(buf).digest()
-  return String((h.readUInt32BE(h[19] & 15) & 0x7fffffff) % 1000000).padStart(6, '0')
-}
+const { enrollmentInfo, enrollmentLifetime, totp, verify } = require('../shared/authenticator.mjs')
+const token = (secret, counter) => totp(Buffer.from(secret, 'base64'), counter)
 function privateBook(directory) {
   const file = path.join(directory, 'private-book.enc')
   let session, enrollment, timer, nextAttempt = 0
   function lock() {
     clearTimeout(timer)
     session?.key.fill(0)
-    session = enrollment = undefined
+    session = undefined
   }
   function touch() { clearTimeout(timer); timer = setTimeout(lock, 5 * 60 * 1000); timer.unref() }
   function persist(s) {
@@ -40,9 +24,11 @@ function privateBook(directory) {
     if (op === 'begin') {
       lock()
       if (fs.existsSync(file)) return {}
-      enrollment = crypto.randomBytes(20)
-      touch()
-      return { uri: 'otpauth://totp/Momo:Private?issuer=Momo&digits=6&period=30&secret=' + base32(enrollment) }
+      if (!enrollment || Date.now() >= enrollment.expires) {
+        enrollment = { seed: crypto.randomBytes(20), label: 'Private-' + crypto.randomBytes(4).toString('hex').toUpperCase(),
+          expires: Date.now() + enrollmentLifetime }
+      }
+      return enrollmentInfo(enrollment.seed, enrollment.label, enrollment.expires)
     }
     if (op === 'unlock') {
       if (Date.now() < nextAttempt) throw new Error('请稍后再试')
@@ -50,18 +36,15 @@ function privateBook(directory) {
       let s
       if (fs.existsSync(file)) s = decrypt(args.password, JSON.parse(fs.readFileSync(file)), purpose)
       else {
-        if (!enrollment) throw new Error('请重新扫码绑定')
+        if (!enrollment || Date.now() >= enrollment.expires) throw new Error('绑定二维码已过期，请关闭后重开并扫描新二维码')
         const salt = crypto.randomBytes(16)
-        s = { salt, key: derive(args.password, salt), value: { secret: enrollment.toString('base64'), last: -1, entries: [] } }
+        s = { salt, key: derive(args.password, salt), value: { secret: enrollment.seed.toString('base64'), last: -1, entries: [] } }
       }
       try {
-        const now = Math.floor(Date.now() / 30000)
-        const accepted = [now, now - 1, now + 1].find(n => n > s.value.last && token(s.value.secret, n) === args.code)
-        if (accepted === undefined) throw new Error('验证码无效或已经使用，请等待下一组')
-        s.value.last = accepted
+        s.value.last = verify(Buffer.from(s.value.secret, 'base64'), args.code, s.value.last)
         persist(s)
       } catch (error) { s.key.fill(0); throw error }
-      lock(); session = s; touch()
+      lock(); enrollment?.seed.fill(0); enrollment = undefined; session = s; touch()
       return s.value.entries
     }
     if (!session) throw new Error('已锁定，请重新验证')

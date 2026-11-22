@@ -338,7 +338,9 @@
     <form id="book-auth" class="fields">
       <img id="book-qr" width="168" height="168" alt="用身份验证器扫码绑定" hidden>
       <label>独立口令（至少 12 个字符）<input id="book-password" type="password" autocomplete="off" required minlength="12"></label>
-      <label>身份验证器验证码<input id="book-code" inputmode="numeric" autocomplete="off" required pattern="[0-9]{6}" maxlength="6"></label>
+      <p id="book-account" hidden></p>
+      <small id="book-clock"></small>
+      <label>身份验证器验证码<input id="book-code" inputmode="numeric" autocomplete="off" required pattern="[0-9]{6}"></label>
       <button class="primary">解锁</button>
     </form>
     <section id="book-content" hidden>

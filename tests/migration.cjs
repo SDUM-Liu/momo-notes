@@ -10,6 +10,21 @@ const migration = require('../desktop/migration.cjs')
 const { privateBook, token } = require('../desktop/private-book.cjs')
 const { seal, unseal, transferId } = require('../shared/sync.mjs')
 
+test('six-digit authenticator codes, clock mismatch and replay', () => {
+  const { totp, verify } = require('../shared/authenticator.mjs')
+  const seed = Buffer.from('12345678901234567890')
+  // RFC 6238 Appendix B, SHA-1 results truncated to six digits.
+  for (const [seconds, code] of [[59,'287082'],[1111111109,'081804'],[1234567890,'005924'],[2000000000,'279037']]) {
+    const step = Math.floor(seconds / 30)
+    assert.equal(totp(seed,step),code)
+    assert.equal(verify(seed,code,-1,seconds*1000),step)
+    assert.throws(() => verify(seed,code,step,seconds*1000),/已经使用/)
+    assert.equal(verify(seed,code,-1,(seconds+30)*1000),step)
+    assert.throws(() => verify(seed,code,-1,(seconds+120)*1000),/时间不一致/)
+  }
+  assert.equal(verify(seed,'２８７ ０８２',-1,59000),1)
+})
+
 test('protected book, authenticated backup and interrupted desktop handoff', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-migration-'))
   try {
@@ -17,6 +32,8 @@ test('protected book, authenticated backup and interrupted desktop handoff', () 
     const store = openStore(a); openStore(b)
     const book = privateBook(a), password = 'correct horse battery staple'
     const { uri } = book.call('begin')
+    book.lock()
+    assert.equal(book.call('begin').uri, uri)
     const bits = new URL(uri).searchParams.get('secret').split('').map(c => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.indexOf(c).toString(2).padStart(5, '0')).join('')
     const secret = Buffer.from(bits.match(/.{8}/g).map(x => parseInt(x, 2))).toString('base64')
     const code = token(secret, Math.floor(Date.now() / 30000))

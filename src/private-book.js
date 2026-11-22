@@ -2,15 +2,21 @@ export function wirePrivateBook(api) {
   if (!api.privateBook) return
   const $ = id => document.getElementById(id)
   const dialog = $('book-dialog'), issue = $('project-issues'), repo = $('project-repo')
-  let editing, entries = [], tab = 0, generation = 0, timer, unlock = false, saving = false
+  let editing, entries = [], tab = 0, generation = 0, timer, clockTimer, unlock = false, saving = false
+  const authButton = $('book-auth').querySelector('button[type=submit], button:not([type])')
   const names = ['密码本', '多媒体', '话题']
   const status = error => { $('book-status').textContent = error?.message || '' }
+  $('book-code').oninput = event => {
+    const input = event.target
+    input.value = input.value.normalize('NFKC').replace(/\s/g,'')
+  }
   function touch() { clearTimeout(timer); timer = setTimeout(() => dialog.close(), 295000) }
   function clear() {
-    ++generation; clearTimeout(timer); unlock = false; entries = []; tab = 0; editing = undefined
+    ++generation; clearTimeout(timer); clearInterval(clockTimer); unlock = false; entries = []; tab = 0; editing = undefined
     $('book-list').replaceChildren(); $('book-content').hidden = true; $('book-auth').hidden = false
     $('book-add').reset(); $('book-auth').reset()
     $('book-qr').removeAttribute('src'); $('book-qr').hidden = true
+    $('book-account').hidden = true; $('book-account').textContent = ''
     status(); void api.privateBook('lock')
   }
   dialog.addEventListener('close', clear)
@@ -19,17 +25,22 @@ export function wirePrivateBook(api) {
   api.onPrivateLock?.(() => { if (dialog.open) dialog.close() })
   async function open() {
     if (dialog.open) return
+    authButton.disabled = true
     dialog.showModal(); const version = ++generation
+    const drawClock = () => { $('book-clock').textContent = '本机时间 ' + new Date().toLocaleString('zh-CN', { hour12: false }) + ' · 请与身份验证器手机核对' }
+    drawClock(); clockTimer = setInterval(drawClock, 1000)
     try {
-      const { uri } = await api.privateBook('begin')
+      const { uri, label, expires } = await api.privateBook('begin')
       if (uri) {
         const qr = await import('qrcode')
         const src = await qr.toDataURL(uri)
         if (generation !== version) return
         $('book-qr').src = src; $('book-qr').hidden = false
-        $('book-status').textContent = '扫码绑定身份验证器，并设置独立口令。'
+        $('book-account').textContent = '身份验证器条目：' + label + '。二维码有效至 ' + new Date(expires).toLocaleTimeString() + '。'
+        $('book-account').hidden = false
+        $('book-status').textContent = '请扫描本页二维码，选择上方编号的条目，并输入当前六位码完成绑定。'
       }
-      if (version === generation) touch()
+      if (version === generation) { touch(); authButton.disabled = false }
     } catch (error) { status(error) }
   }
   // Pointer capture also supports a pen or touchscreen on a desktop host.
@@ -74,15 +85,22 @@ export function wirePrivateBook(api) {
     $('book-file').hidden = tab !== 1; $('book-file').required = tab === 1
   }
   $('book-auth').onsubmit = async e => {
-    e.preventDefault(); const version = generation
+    e.preventDefault()
+    if (authButton.disabled) return
+    authButton.disabled = true
+    const version = generation
     try {
       const data = await api.privateBook('unlock', { password: $('book-password').value, code: $('book-code').value })
       if (generation !== version) return
       if (document.hidden) { dialog.close(); return }
-      entries = data; unlock = true; touch(); status(); $('book-auth').reset()
+      entries = data; unlock = true; clearInterval(clockTimer); touch(); status(); $('book-auth').reset()
       $('book-qr').removeAttribute('src'); $('book-qr').hidden = true
       $('book-auth').hidden = true; $('book-content').hidden = false; render()
-    } catch (error) { status(error) }
+    } catch (error) {
+      if (generation === version) status(error)
+    } finally {
+      if (generation === version) authButton.disabled = false
+    }
   }
   async function save(next) {
     if (!unlock || saving) return
