@@ -101,7 +101,12 @@ async function test() {
           picker.files = selection.files; picker.dispatchEvent(new Event('change')); await drive.flush()
           expect(files.length === 2 && files[1].size === 129 * chunkSize, 'large file missing from manifest')
           const large = files[1]
-          const url = await book('mediaPreview', { id: large.id })
+          let lastBlock = 0
+          const url = await book('mediaPreview', { id: large.id, progress(done, total) {
+            expect(done >= lastBlock && total === 129, 'invalid preparation progress')
+            lastBlock = done
+          } })
+          expect(lastBlock === 129, 'preparation did not report completion')
           const tail = await fetch(url, { headers: { Range: 'bytes=' + (large.size - 18) + '-' } })
           expect(tail.status === 206 && (await tail.arrayBuffer()).byteLength === 18, 'large-file range unavailable')
           await book('mediaRelease', { id: large.id })

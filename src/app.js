@@ -113,8 +113,14 @@ const noteMedia = Node.create({
 function showDrive(store) {
   if (!drive) {
     drive = wirePrivateDrive($('private-drive'), {
-      async media(op, args) {
+      async media(op, args, progress) {
         if (store !== privateStore && !['mediaRelease','mediaAbort','mediaRemove'].includes(op)) throw new Error('已锁定')
+        if (api.mobile && op === 'mediaPreview') {
+          // Large previews can take longer than the idle timeout on a phone. Renew it only while reading data.
+          args = { ...args, progress(done, total) {
+            if (store === privateStore) { armPrivateLock(); progress?.(done, total) }
+          } }
+        }
         const result = await api.privateBook(op, args)
         if (op === 'mediaWrite' && store === privateStore) armPrivateLock()
         return result

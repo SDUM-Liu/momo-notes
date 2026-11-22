@@ -216,7 +216,9 @@ export function wirePrivateDrive(container, { save, picker, media }) {
         previewId = file.id
         player.hidden = true
         fallback.textContent = '正在打开…'
-        void media('mediaPreview', { id: file.id }).then(url => {
+        void media('mediaPreview', { id: file.id }, (done, total) => {
+          if (dialog === item && item.open && total) fallback.textContent = '正在打开… ' + Math.floor(100 * done / total) + '%'
+        }).then(url => {
           if (dialog !== item || !item.open) return
           fallback.textContent = '当前设备无法预览此文件。'
           fallback.hidden = true

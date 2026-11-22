@@ -242,9 +242,11 @@ export function sessionMedia(store, key, guard, touch, files) {
             const raw = await store.readRaw(id, i); check()
             const plain = new Uint8Array(await crypto.subtle.decrypt(params(id, i, raw.subarray(0, 12)), key, raw.subarray(12)))
             try { check(); await task.sink.write(plain) } finally { plain.fill(0) }
-            check(); touch()
+            check(); touch(); args.progress?.(i + 1, count(meta))
           }
-          const file = await task.sink.file(check); check()
+          const file = await task.sink.file(() => {
+            check(); touch(); args.progress?.(count(meta), count(meta))
+          }); check()
           task.url = URL.createObjectURL(file)
           return task.url
         })
