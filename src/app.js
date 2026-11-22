@@ -106,6 +106,7 @@ const noteMedia = Node.create({
 
 function resetPageContext() {
   ++pageRequest; ++editGeneration
+  finishPicker()
   composingEdit = followNewDay = retryOnUnlock = previousSaveError = false
   pendingNoteChange = undefined; currentDate = undefined
   visited.clear(); revisions.clear()
@@ -173,7 +174,9 @@ api.onPrivateLock?.(() => {
   if ($('book-dialog').open) $('book-dialog').close()
   void endPrivatePages(true)
 })
-document.addEventListener('visibilitychange', () => { if (document.hidden && privateStore) void endPrivatePages(true) })
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && privateStore && !api.privatePickerActive?.()) void endPrivatePages(true)
+})
 
 function errorMessage(error) {
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -666,10 +669,23 @@ async function insertImages(files, position) {
 }
 
 $('insert-image').onmousedown = event => event.preventDefault()
-$('insert-image').onclick = () => $('image-input').click()
+let attachmentPage
+function finishPicker() {
+  attachmentPage = undefined
+  api.privatePicker?.(false)
+}
+$('insert-image').onclick = () => {
+  attachmentPage = { store: noteStore(), category, date: currentDate }
+  if (privateStore) api.privatePicker?.(true)
+  $('image-input').click()
+}
+$('image-input').oncancel = finishPicker
 $('image-input').onchange = () => {
-  void insertImages([...$('image-input').files])
+  if (attachmentPage?.store === noteStore() && attachmentPage.category === category && attachmentPage.date === currentDate) {
+    void insertImages([...$('image-input').files])
+  }
   $('image-input').value = ''
+  finishPicker()
 }
 
 function renderEdgePreview() {

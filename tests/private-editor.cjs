@@ -32,6 +32,10 @@ async function test() {
     assert(await page.locator('#question').isDisabled())
     await page.getByRole('tab',{name:'多媒体'}).click()
     await editor.locator('audio').waitFor()
+    const chooser = page.waitForEvent('filechooser')
+    await page.locator('#insert-image').click()
+    await (await chooser).setFiles({name:'sample.mp4',mimeType:'video/mp4',buffer:Buffer.from('fixture')})
+    await editor.locator('video').waitFor()
     await page.getByRole('tab',{name:'话题'}).click()
     await editor.locator('input[type=checkbox]').waitFor()
     await editor.locator('p').first().click()
@@ -52,6 +56,7 @@ async function test() {
     await page.keyboard.press('Control+z')
     assert(!(await editor.innerText()).includes('private-marker'))
     const stored = decrypt(password,JSON.parse(fs.readFileSync(filename,'utf8')),purpose).value.entries[0]
+    assert(JSON.stringify(stored.notes['finds__'+localDay()]).includes('data:video/mp4;base64,'))
     assert(stored.categories.some(c=>c.name==='自定义'))
     const doc = stored.notes['stories__'+localDay()]
     assert(JSON.stringify(doc).includes('private-marker') && JSON.stringify(doc).includes('"type":"table"'))

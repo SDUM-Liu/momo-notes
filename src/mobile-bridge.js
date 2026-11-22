@@ -74,17 +74,21 @@ export function createMobileBridge() {
     mode, today, settings: publicSettings(), browser, categories, locked: syncStatus().locked, mobileHost: hostSelected,
     update: updates.state,
   })
+  let privatePickerUntil = 0
+  const privatePickerActive = () => Boolean(ordinaryBrowser && Date.now() < privatePickerUntil)
   let privateLockListener = noop, ordinaryBrowser, privateWebPage = false
   const bookOperation = mobileBook(
     async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
     async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')), () => hostSelected && !transferringRole && document.documentElement.dataset.momoFloating !== 'true')
   async function privateBook(op, args) {
+    if (op === 'background' && privatePickerActive()) return
     const result = await bookOperation(op, args)
     if (op === 'unlock') {
       ordinaryBrowser = browser
       browser = { url: '', loading: false, canGoBack: false }
       onBrowser(browser)
     } else if ((op === 'lock' || op === 'background') && ordinaryBrowser) {
+      privatePickerUntil = 0
       if (privateWebPage) void InAppBrowser.close().catch(noop)
       privateWebPage = false
       browser = ordinaryBrowser
@@ -420,7 +424,9 @@ export function createMobileBridge() {
   })
 
   return {
-    mobile: true, privateBook, onPrivateLock(callback) { privateLockListener = callback },
+    mobile: true, privateBook, privatePickerActive,
+    privatePicker(active) { privatePickerUntil = active ? Date.now() + 90000 : 0 },
+    onPrivateLock(callback) { privateLockListener = callback },
     saveBackup: platform === 'android' ? async file => syncTransport.saveBackup({backup:await file.text()}) : undefined,
     async handoff(op,...args) {
       await init
