@@ -17,7 +17,7 @@ function handoff({ root, directory, sync, follower, snapshot, credentials, resta
   }
   if (rx?.done && Date.now() - (rx.completed || 0) > 86400000) rx = null
   function demote() {
-    if (sync.state().enabled) sync.setEnabled(false)
+    if (sync.owns(parsePairing(tx.pair).key)) sync.retire()
     if (follower.code !== tx.pair) follower.setPair(tx.pair)
   }
   if (tx && tx.directory === directory) demote()

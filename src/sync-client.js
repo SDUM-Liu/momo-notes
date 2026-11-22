@@ -29,7 +29,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       const key = 'momo-device/' + connection.room
       let id = localStorage.getItem(key)
       if (!id) { id = crypto.randomUUID(); localStorage.setItem(key, id) }
-      const platform = /Android|iPhone|iPad|Windows|Mac|Linux/i.exec(navigator.userAgent)?.[0] || '设备'
+      const platform = ['Android','iPhone','iPad','Windows','Mac','Linux'].find(name => navigator.userAgent.includes(name)) || '设备'
       return { id, platform }
     } catch { return undefined }
   }

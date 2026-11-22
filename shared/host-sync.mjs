@@ -210,6 +210,14 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       })
     },
     setEnabled,
+    retire() {
+      delete config.key
+      delete config.owner
+      config.devices = []
+      lastSeen.clear()
+      replay.clear()
+      return setEnabled(false)
+    },
     exchange,
     link() {
       if (!enabled() || !config.key || !config.owner) return null

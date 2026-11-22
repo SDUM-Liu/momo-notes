@@ -14,7 +14,7 @@ export function wirePrivateBook(api) {
     status(); void api.privateBook('lock')
   }
   dialog.addEventListener('close', clear)
-  document.addEventListener('visibilitychange', () => { if (document.hidden && dialog.open) dialog.close() })
+  document.addEventListener('visibilitychange', () => { if (document.hidden && dialog.open && unlock) dialog.close() })
   $('book-close').onclick = () => dialog.close()
   api.onPrivateLock?.(() => { if (dialog.open) dialog.close() })
   async function open() {
@@ -78,6 +78,7 @@ export function wirePrivateBook(api) {
     try {
       const data = await api.privateBook('unlock', { password: $('book-password').value, code: $('book-code').value })
       if (generation !== version) return
+      if (document.hidden) { dialog.close(); return }
       entries = data; unlock = true; touch(); status(); $('book-auth').reset()
       $('book-qr').removeAttribute('src'); $('book-qr').hidden = true
       $('book-auth').hidden = true; $('book-content').hidden = false; render()

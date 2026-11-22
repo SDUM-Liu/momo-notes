@@ -47,6 +47,7 @@ export function mobileBook(read, write, primary) {
     if (session === s) touch()
   }
   return (op, args) => {
+    if (op === 'background') { if (session || !seed) lock(); else ++revision; return Promise.resolve() }
     if (op === 'lock') { lock(); return Promise.resolve() }
     const next = queue.then(() => operation(op,args)); queue = next.catch(() => {}); return next
   }

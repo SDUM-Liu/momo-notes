@@ -329,7 +329,14 @@ export function createMobileBridge() {
     await secure.set('staged-' + prefix.slice(0,-1),null)
   }
   async function demote(code) {
-    if (hostSelected && host) { host.setEnabled(false); await hostSave }
+    if (host && host.owns(parsePairing(code).key)) { host.retire(); await hostSave }
+    else if (!host) {
+      const retired = await secure.get('sync-host')
+      if (retired?.key === parsePairing(code).key) {
+        delete retired.key; delete retired.owner; retired.enabled = false; retired.devices = []
+        await secure.set('sync-host',retired)
+      }
+    }
     await SecureStorage.setItem('sync-pair',code)
     await dbPut('primary-role',false)
     hostSelected = false
@@ -374,7 +381,7 @@ export function createMobileBridge() {
     if (native) {
       hasKey = Boolean(await SecureStorage.getItem(keyName).catch(() => null))
       await App.addListener('appStateChange', ({ isActive }) => {
-        if (isActive) { void runRefresh(); void backgroundSync() } else void privateBook('lock')
+        if (isActive) { void runRefresh(); void backgroundSync() } else void privateBook('background')
       })
       await App.addListener('appUrlOpen', ({ url }) => openWidget(url))
       await InAppBrowser.addListener('browserClosed', () => {
