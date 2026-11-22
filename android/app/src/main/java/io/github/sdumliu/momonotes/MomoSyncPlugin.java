@@ -1,6 +1,13 @@
 package io.github.sdumliu.momonotes;
 
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -22,6 +29,30 @@ public class MomoSyncPlugin extends Plugin {
     private final OkHttpClient client = new OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build();
+
+    @PluginMethod
+    public void wifiAddress(PluginCall call) {
+        ConnectivityManager manager = getContext().getSystemService(ConnectivityManager.class);
+        Network network = manager == null ? null : manager.getActiveNetwork();
+        if (network != null) {
+            NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+            LinkProperties properties = manager.getLinkProperties(network);
+            if (properties != null && capabilities != null
+                    && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                for (LinkAddress link : properties.getLinkAddresses()) {
+                    InetAddress address = link.getAddress();
+                    if (address instanceof Inet4Address && !address.isLoopbackAddress() && !address.isLinkLocalAddress()) {
+                        JSObject result = new JSObject();
+                        result.put("address", address.getHostAddress());
+                        call.resolve(result);
+                        return;
+                    }
+                }
+            }
+        }
+        call.reject("请在 Wi-Fi 网络详情中查看设备地址");
+    }
 
     @PluginMethod
     public void saveBackup(PluginCall call) {

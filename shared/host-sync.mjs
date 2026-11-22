@@ -1,9 +1,12 @@
 import { digest, seal, unseal, wireLimit, pairingCode, relayOrigin, maxPairingLength, transferId } from './sync.mjs'
+import { normalizeSSHShareHint } from './ssh-endpoint.mjs'
 import { noteIdentity, noteKey, localDay, validateCategory, hasContent } from './notes.mjs'
 
 const randomHex = () => transferId() + transferId()
 const backupOwner = owner => digest('momo-sync-v3/backup/' + owner)
 const revisionOf = doc => digest(JSON.stringify(doc))
+const sshOwner = proof => typeof proof === 'string' && /^[a-f0-9]{64}$/.test(proof)
+  ? digest('momo/ssh-hint/' + proof) : null
 
 export function createHostSync({ config = {}, store, ask, notify, codex, update, defaults, relayOverride, persist }) {
   const replay = new Map()
@@ -12,12 +15,23 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value?.id) ||
         !['Android','iPhone','iPad','Windows','Mac','Linux','设备'].includes(value.platform)) return
     config.devices ??= []
-    if (!config.devices.some(d => d.id === value.id)) {
+    let device = config.devices.find(d => d.id === value.id)
+    let changed = false
+    if (!device) {
       if (config.devices.length >= 100) return
-      config.devices.push({ id: value.id, platform: value.platform })
-      persist()
+      device = { id: value.id, platform: value.platform }
+      config.devices.push(device)
+      changed = true
     }
+    const owner = sshOwner(value.sshProof)
+    if (owner && device.sshOwner !== owner) {
+      if (device.sshOwner) throw new Error('设备身份与此前配对时不一致')
+      device.sshOwner = owner
+      changed = true
+    }
+    if (changed) persist()
     lastSeen.set(value.id, Date.now())
+    return device
   }
   let lease, leaseTimer
   let queue = Promise.resolve()
@@ -66,7 +80,8 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     : routes().some(url => !statuses.has(url) || statuses.get(url) === 'connecting') ? 'connecting' : 'offline'
 
   function state() {
-    return { role: 'host', devices: (config.devices || []).map(d => ({ ...d,
+    return { role: 'host', devices: (config.devices || []).map(d => ({ id: d.id, platform: d.platform,
+      ...(d.sshHint && { sshHint: d.sshHint }),
       online: enabled() && Date.now() - (lastSeen.get(d.id) || 0) < 65000 })), enabled: enabled(), relay: relay(), fallback: backup(),
       onlineRelay: routes().find(url => statuses.get(url) === 'online'),
       status: enabled() ? status() : 'offline', locked: Boolean(lease) }
@@ -87,6 +102,18 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
   }
 
   async function processRequest({ op, payload, token }) {
+    if (op === 'ssh-hint/get' || op === 'ssh-hint/set') {
+      const device = config.devices?.find(d => d.id === payload?.device?.id)
+      const owner = sshOwner(payload?.device?.sshProof)
+      if (!owner || device?.sshOwner !== owner) throw new Error('无法确认设备身份，请先在当前从设备完成同步')
+      if (op === 'ssh-hint/set') {
+        const hint = payload.hint === null ? null : normalizeSSHShareHint(payload.hint)
+        if (hint) device.sshHint = hint
+        else delete device.sshHint
+        persist()
+      }
+      return device.sshHint || null
+    }
     if (op === 'state' || op === 'index') recordDevice(payload)
     if (op === 'state' || op === 'test') return { locked: Boolean(lease) }
     if (op === 'index') return { categories: store.data.categories, revisions: store.data.revisions, locked: Boolean(lease) }

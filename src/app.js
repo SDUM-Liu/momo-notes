@@ -18,6 +18,8 @@ import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
 import { wireHandoff } from './handoff.js'
 import { wirePrivateBook } from './private-book.js'
+import { wireSSHSharing } from './ssh-sharing.js'
+import { wireSSHDevices } from './ssh-devices.js'
 import './style.css'
 
 const api = window.momo ? desktopFollower(window.momo) : (await import('./mobile-bridge.js')).createMobileBridge()
@@ -229,6 +231,7 @@ function showView(next) {
   }
   if (view === 'browser' && next !== 'browser') void api.hideBrowser()
   if (view === 'sync' && next !== 'sync') {
+    if ($('ssh-dialog').open) $('ssh-dialog').close()
     ++qrRequest
     $('sync-qr').hidden = true
     $('sync-qr').removeAttribute('src')
@@ -895,46 +898,11 @@ async function connectHostLink() {
   stopHostLink = () => links.forEach(stop => stop())
 }
 
-function drawDeviceList(devices) {
-  const list = $('sync-device-list')
-  const key = JSON.stringify(devices)
-  if (list.dataset.items === key) return
-  list.dataset.items = key
-  list.replaceChildren()
-  if (!devices.length) list.textContent = '新版从设备完成同步后会出现在这里。'
-  for (const d of devices) {
-    const row = document.createElement('div'), label = document.createElement('p')
-    label.textContent = d.platform + ' · ' + d.id.slice(0, 8) + (d.online ? ' · 在线' : ' · 离线')
-    row.append(label)
-    if (api.deviceSSH) {
-      const input = document.createElement('input'), button = document.createElement('button')
-      input.placeholder = '该设备已验证的 SSH Host 别名'; input.value = localStorage.getItem('ssh/' + d.id) || ''
-      button.type = 'button'; button.className = 'quiet'; button.textContent = '打开 SSH 终端'
-      button.onclick = async () => {
-        try { await api.deviceSSH(d.id, input.value.trim()); localStorage.setItem('ssh/' + d.id, input.value.trim()) }
-        catch (e) { $('sync-status').textContent = errorMessage(e) }
-      }
-      const consent = document.createElement('button')
-      consent.type = 'button'; consent.className = 'quiet'
-      let allowed = ''
-      function refreshConsent() { consent.textContent = allowed ? '撤销 AI 主机名检查' : '允许 AI 检查主机名' }
-      void api.deviceSSHConfig(d.id).then(alias => { allowed = alias; if (!input.value) input.value = alias; refreshConsent() }).catch(() => {})
-      refreshConsent()
-      consent.onclick = async () => {
-        try {
-          if (!allowed && !input.value.trim()) throw new Error('请先输入设备的 SSH 别名')
-          allowed = await api.deviceSSHConfig(d.id, allowed ? '' : input.value.trim())
-          refreshConsent()
-          $('sync-status').textContent = allowed ? '在桃桃 AI 中发送「检查设备 ' + d.id.slice(0, 8) + '」' : '已撤销授权'
-        } catch (e) { $('sync-status').textContent = errorMessage(e) }
-      }
-      row.append(input, button, consent)
-    }
-    list.append(row)
-  }
-}
+const drawSSHSharing = wireSSHSharing(api, errorMessage)
+const drawDeviceList = wireSSHDevices(api, errorMessage)
 setInterval(() => { if (view === 'sync') void api.syncState().then(drawSync).catch(() => {}) }, 10000)
 function drawSync(value) {
+  drawSSHSharing(value)
   drawDeviceList(value.devices || [])
   syncState = value
   const mobile = value.role === 'mobile'

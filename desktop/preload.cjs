@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('momo', {
     if (!['target', 'ready', 'prepare', 'receive', 'chunk', 'cutover', 'pending', 'finish'].includes(op)) throw new Error('无效的迁移操作')
     return ipcRenderer.invoke('handoff:' + op, ...args)
   },
+  deviceSSHProfile: invoke('device:ssh-profile'),
+  deviceSSHConnect: invoke('device:ssh-connect'),
+  deviceSSHPermission: invoke('device:ssh-permission'),
   deviceSSHConfig: invoke('device:ssh-config'),
   deviceSSH: invoke('device:ssh'),
   migrationFile: invoke('migration:file'),

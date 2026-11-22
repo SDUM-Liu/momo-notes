@@ -462,6 +462,12 @@ export function createMobileBridge() {
     onNotes: callback => { onNotes = callback },
     onSync: callback => { onSync = callback },
     async syncState() { await init; return syncStatus() },
+    async sshHint(scope, value) {
+      await init
+      if (hostSelected || changingRole) throw new Error('请在已配对的从设备操作')
+      return sync.sshHint(scope, value)
+    },
+    wifiAddress: platform === 'android' && native ? async () => (await syncTransport.wifiAddress()).address : undefined,
     async selectSyncRole(role) {
       await init
       if (changingRole) throw new Error('正在切换设备角色')
@@ -602,6 +608,7 @@ export function createMobileBridge() {
         repo: 'https://github.com/SDUM-Liu/momo-notes',
         issues: 'https://github.com/SDUM-Liu/momo-notes/issues',
         codexSetup: codexSetupUrl,
+        termux: 'https://termux.dev/en/',
       }[target]
       if (typeof url !== 'string') return
       if (native) await InAppBrowser.openInExternalBrowser({ url })

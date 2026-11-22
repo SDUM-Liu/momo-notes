@@ -323,10 +323,35 @@ time { font-size: 11px; color: var(--muted); }
 #codex-log pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #codex-folder-label { overflow-wrap: anywhere; }
 .sync-body { flex: 1; overflow: auto; padding: 2px 14px 14px; }
+.ssh-devices { margin: 15px 0; }
+.ssh-devices h2 { font-size: 14px; margin: 0 0 6px; }
+.ssh-device { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 5px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
+.ssh-device strong, .ssh-device small { display: block; }
+.ssh-device small, #ssh-device-label, #ssh-help p, #ssh-ai p { color: var(--muted); }
+.ssh-device small { font-size: 12px; margin-top: 3px; }
+#ssh-dialog { overflow-y: auto; }
+.ssh-head, .ssh-actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.ssh-head h2 { font-size: 17px; margin: 13px 0 7px; }
+#ssh-device-label, #ssh-hint { margin: 4px 0 9px; }
+#ssh-hint { color: var(--accent); }
+.ssh-field { display: grid; gap: 4px; margin: 8px 0; font-weight: 550; }
+.ssh-field :is(input,select) { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid #dccad5; border-radius: 6px; padding: 6px 8px; background: white; color: var(--ink); }
+.ssh-pair { display: grid; gap: 8px; grid-template-columns: 2fr 1fr; }
+#ssh-help, #ssh-ai { margin: 9px 0; }
+#ssh-help summary, #ssh-ai summary { cursor: pointer; }
+#ssh-help p, #ssh-ai p { line-height: 1.45; margin: 6px 0; }
+#ssh-list-status:empty, #ssh-result:empty { display: none; }
+.ssh-device small { overflow-wrap: anywhere; }
+#ssh-list-status { color: var(--muted); font-size: 12px; }
+.ssh-actions { position: sticky; bottom: -13px; justify-content: flex-end; padding: 8px 0; border-top: 1px solid var(--line); background: var(--paper); }
 .sync-role { display: flex; gap: 4px; }
 .sync-role button[aria-pressed="true"] { background: #f7e3eb; font-weight: 650; }
 .sync-body label { display: grid; gap: 4px; margin-block: 8px; }
 .sync-body p { color: var(--muted); }
+#ssh-share { margin-block: 12px; }
+#ssh-share fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+#ssh-share summary { cursor: pointer; }
+.ssh-share-help { font-size: .92em; margin-block: 10px; }
 #sync-qr { width: min(208px, 100%); aspect-ratio: 1; margin-top: 9px; }
 .qr-picker { cursor: pointer; }
 .qr-picker input { max-width: 100%; }

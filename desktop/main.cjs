@@ -8,6 +8,7 @@ const { createUpdates } = require('./updates.cjs')
 const { desktopUpdateSource } = require('./update-source.cjs')
 const { createInstallerDownloads } = require('./installers.cjs')
 const { createBrowser } = require('./browser.cjs')
+const { normalizeProfile, sameTarget, deviceProfiles, openTerminal, hostName } = require('./ssh.cjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort } = require('../shared/ai.mjs')
 const { codexSetupUrl } = require('../shared/links.mjs')
@@ -26,6 +27,7 @@ if (process.env.MOMO_DATA_DIR && !app.isPackaged) app.setPath('userData', path.r
 let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, browser, sync, follower, codex
 const migration = require('./migration.cjs')
 let transfer
+let sshDevices
 let profileDirectory
 let book
 let mode = 'pet'
@@ -130,16 +132,20 @@ function codexAction(op, data, paired = false) {
   throw new Error('未知的桃桃 AI 请求')
 }
 
-function sshConfig() {
-  const filename = path.join(profileDirectory, 'ssh-devices.json')
-  return fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {}
+function requireSSHDevice(id) {
+  if (follower.store || !sync.state().devices.some(device => device.id === id))
+    throw new Error('请在主设备选择已登记的设备')
 }
 async function reportDevice(prefix, data, paired) {
   if (paired && !codex.settings().enabled) throw new Error('请先开启桃桃 AI 共享')
   const devices = sync.state().devices.filter(d => d.id.startsWith(prefix))
-  const alias = devices.length === 1 && sshConfig()[devices[0].id]
-  if (!alias || follower.store) throw new Error('请先在主设备上为该设备授权 SSH 主机名检查')
-  const name = await require('./ssh.cjs').hostName(alias)
+  const id = devices.length === 1 && devices[0].id
+  const target = id && sshDevices.get(id)
+  if (follower.store || !target?.permitted) throw new Error('请先在主设备上为该设备授权 SSH 主机名检查')
+  const name = await hostName(target.profile)
+  requireSSHDevice(id)
+  const current = sshDevices.get(id)
+  if (!current.permitted || !sameTarget(target.profile, current.profile)) throw new Error('该设备的 SSH 授权已变化')
   if (book.unlocked) throw new Error('请先锁定私密便签')
   return codex.send({ ...data, taskMode: false, prompt: '用户要求检查设备 ' + prefix + '。主机已通过 SSH 执行 hostname。请仅汇报本次检查结果。主机名数据为 ' + JSON.stringify(name) }, paired)
 }
@@ -220,19 +226,37 @@ function registerIPC() {
     app.relaunch(); app.quit()
     return true
   })
+  handle('device:ssh-profile', (id, profile) => {
+    requireSSHDevice(id)
+    return profile === undefined ? sshDevices.get(id).profile : sshDevices.save(id, profile)
+  })
+  handle('device:ssh-permission', (id, enabled) => {
+    requireSSHDevice(id)
+    return enabled === undefined ? sshDevices.get(id).permitted : sshDevices.permit(id, enabled)
+  })
+  handle('device:ssh-connect', async (id, input) => {
+    requireSSHDevice(id)
+    const target = normalizeProfile(input)
+    const before = sshDevices.get(id).profile
+    await openTerminal(target)
+    requireSSHDevice(id)
+    const current = sshDevices.get(id).profile
+    if (!sameTarget(before, current) && !sameTarget(target, current)) throw new Error('终端已打开。连接信息在启动期间已更改，请重新选择设备')
+    return sshDevices.save(id, target)
+  })
   handle('device:ssh-config', (id, alias) => {
-    if (follower.store || !sync.state().devices.some(d => d.id === id)) throw new Error('设备未登记')
-    const config = sshConfig()
-    if (alias === undefined) return config[id] || ''
-    if (alias && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(alias)) throw new Error('SSH 别名无效')
-    if (alias) config[id] = alias; else delete config[id]
-    const file = path.join(profileDirectory, 'ssh-devices.json')
-    fs.writeFileSync(file + '.tmp', JSON.stringify(config), { mode: 0o600 }); fs.renameSync(file + '.tmp', file)
+    requireSSHDevice(id)
+    if (alias === undefined) {
+      const entry = sshDevices.get(id)
+      return entry.permitted ? entry.profile?.alias || '' : ''
+    }
+    if (alias !== '') sshDevices.save(id, { alias })
+    sshDevices.permit(id, alias !== '')
     return alias
   })
   handle('device:ssh', (id, alias) => {
-    if (follower.store || !sync.state().devices.some(d => d.id === id)) throw new Error('请在主设备选择已登记的设备')
-    return require('./ssh.cjs').openTerminal(alias)
+    requireSSHDevice(id)
+    return openTerminal({ alias }, 'known-terminal')
   })
   handle('app:state', state)
   handle('window:toggle', toggle)
@@ -416,6 +440,7 @@ function registerIPC() {
 function start() {
   profileDirectory = migration.activePath(app.getPath('userData'))
   store = openStore(profileDirectory)
+  sshDevices = deviceProfiles(profileDirectory)
   book = require('./private-book.cjs').privateBook(profileDirectory)
   const lockBook = () => { book.lock(); restoreBrowser(); win?.webContents.send('private:locked') }
   powerMonitor.on('lock-screen', lockBook)

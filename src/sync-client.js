@@ -1,4 +1,4 @@
-import { parsePairing, seal, unseal, wireLimit } from '../shared/sync.mjs'
+import { parsePairing, seal, unseal, wireLimit, transferId } from '../shared/sync.mjs'
 
 export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change,
   readOnly = false, reconcile = () => {}, editing = () => false }) {
@@ -6,7 +6,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
   let via
   let transferring = false
   let deferred = false
-  const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), via, last, error,
+  const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), sshHintScope: pair?.room, via, last, error,
     ...(readOnly && { syncing: Boolean(running || switching || (pair && !verified && !error)) }),
     locked: readOnly || !pair || !verified || Boolean(transferring || switching || peerLocked) })
   async function request(connection, op, payload, token) {
@@ -30,7 +30,13 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       let id = localStorage.getItem(key)
       if (!id) { id = crypto.randomUUID(); localStorage.setItem(key, id) }
       const platform = ['Android','iPhone','iPad','Windows','Mac','Linux'].find(name => navigator.userAgent.includes(name)) || '设备'
-      return { id, platform }
+      const proofName = 'momo-ssh-hint/' + connection.room + '/' + id
+      let sshProof = localStorage.getItem(proofName)
+      if (!sshProof) {
+        sshProof = transferId() + transferId()
+        localStorage.setItem(proofName, sshProof)
+      }
+      return { id, platform, sshProof }
     } catch { return undefined }
   }
   const index = connection => request(connection, 'index', identity(connection))
@@ -148,6 +154,22 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       verified = false
       error = '主机连接中断，等待重新同步'
       change(state())
+    },
+    async sshHint(scope, value) {
+      const connection = pair
+      if (!connection || switching || scope !== connection.room) throw new Error('请打开当前已配对主设备的共享设置')
+      const device = identity(connection)
+      if (!device) throw new Error('当前设备的本地存储不可用')
+      try {
+        const hint = await request(connection, value === undefined ? 'ssh-hint/get' : 'ssh-hint/set', { device, hint: value })
+        if (pair !== connection || switching) throw new Error('主设备已切换，请重新打开共享设置')
+        return hint
+      } catch (error) {
+        if (error.message === '未知的同步请求' || error.code === 'SYNC_BUSY' && error.message.includes('同步锁已失效')) {
+          throw new Error('请将主设备更新到支持 SSH 地址共享的版本')
+        }
+        throw error
+      }
     },
     async test(code) {
       const connection = String(code ?? '').trim() ? parsePairing(code) : pair

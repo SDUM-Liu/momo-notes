@@ -184,7 +184,11 @@
             <label>备用服务<input id="sync-fallback" type="url" placeholder="可选，首选不可达时自动使用" maxlength="180"></label>
           </details>
           <button id="sync-enable" class="primary">开启主机同步</button>
-          <details class="fields"><summary>绑定设备</summary><div id="sync-device-list"></div></details>
+          <section class="ssh-devices" aria-labelledby="ssh-list-title">
+            <h2 id="ssh-list-title">绑定设备<span class="desktop-only"> · SSH</span></h2>
+            <div id="sync-device-list"></div>
+            <p id="ssh-list-status" role="status"></p>
+          </section>
           <div id="sync-host-details" hidden>
             <img id="sync-qr" alt="同步配对二维码" hidden>
             <label>配对码<input id="sync-code" readonly></label>
@@ -204,6 +208,36 @@
           <button id="sync-drafts" class="quiet" type="button">查看本机未合并的草稿</button>
           <textarea id="sync-draft-text" aria-label="本机未合并的草稿" readonly hidden></textarea>
         </form>
+        <details id="ssh-share" hidden>
+          <summary>分享本设备的 SSH 地址</summary>
+          <p>先在本设备开启 SSH 服务，再把登录信息分享给已配对的主设备。</p>
+          <form id="ssh-share-form">
+            <fieldset>
+              <label>本设备地址<input id="ssh-share-host" type="text" placeholder="IP 地址或主机名" maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
+              <button id="ssh-share-wifi" class="quiet" type="button" hidden>填入当前 Wi-Fi 地址</button>
+              <label>SSH 用户名<input id="ssh-share-user" type="text" maxlength="128" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
+              <label><span id="ssh-share-port-label">端口</span><input id="ssh-share-port" type="number" min="1" max="65535" value="22" inputmode="numeric" required></label>
+              <details class="ssh-share-help">
+                <summary>在哪里找这些信息？</summary>
+                <p id="ssh-share-device-help"></p>
+                <div id="ssh-share-termux" hidden>
+                  <button id="ssh-get-termux" class="quiet" type="button">查看 Termux 官方下载入口</button>
+                  <ol>
+                    <li>如果使用 Termux，先在其中运行 <code>pkg install openssh</code> 安装 OpenSSH。</li>
+                    <li>运行 <code>passwd</code> 设置 SSH 登录密码，然后运行 <code>sshd</code> 启动服务。</li>
+                    <li>运行 <code>whoami</code> 查看用户名，填到上方。Termux 默认端口为 <code>8022</code>，如已修改，请填实际值。</li>
+                  </ol>
+                </div>
+                <p>通常需连接同一局域网，或填写主设备能直接访问的地址。同步中继不转发 SSH 连接。</p>
+              </details>
+              <div class="project-links">
+                <button type="submit" class="primary">分享给主设备</button>
+                <button id="ssh-share-revoke" type="button" class="quiet" hidden>撤回地址</button>
+              </div>
+            </fieldset>
+          </form>
+          <p id="ssh-share-status" role="status" aria-live="polite"></p>
+        </details>
       </div>
     </section>
     <section id="ai-view" class="view chat-view" hidden>
@@ -335,6 +369,36 @@
     </section>
   </main>
   <script type="module" src="/src/app.js"></script>
+  <dialog id="ssh-dialog" class="chat-dialog" aria-labelledby="ssh-title">
+    <header class="ssh-head"><h2 id="ssh-title">连接设备</h2><button type="button" id="ssh-close" class="quiet" aria-label="关闭连接设置">关闭</button></header>
+    <form id="ssh-form">
+      <p id="ssh-device-label"></p>
+      <p id="ssh-hint" hidden></p>
+      <button type="button" id="ssh-use-hint" class="quiet" hidden>采用从设备分享的信息</button>
+      <label class="ssh-field">连接方式<select id="ssh-mode">
+        <option value="address">使用设备地址</option><option value="alias">使用已有 SSH 别名</option>
+      </select></label>
+      <div id="ssh-address-fields">
+        <label class="ssh-field">设备地址<input id="ssh-host" required maxlength="253" placeholder="IP 地址或主机名" spellcheck="false" autocomplete="off"></label>
+        <div class="ssh-pair">
+          <label class="ssh-field">登录用户名<input id="ssh-user" required maxlength="128" autocomplete="off" spellcheck="false"></label>
+          <label class="ssh-field">SSH 端口<input id="ssh-port" type="number" required min="1" max="65535" inputmode="numeric"></label>
+        </div>
+      </div>
+      <label class="ssh-field" id="ssh-alias-field" hidden>SSH 别名<input id="ssh-alias" disabled required maxlength="128" placeholder="这台电脑的 SSH 配置中已有的 Host" autocomplete="off" spellcheck="false"></label>
+      <details id="ssh-help"><summary>第一次连接？</summary>
+        <p id="ssh-platform-help"></p>
+        <p>使用局域网地址时，让两台设备连同一个 Wi-Fi。异地连接需要电脑能访问的 SSH 地址。便签同步中继只传递这里填写的连接信息。</p>
+        <p>第一次连接时，在终端核对目标设备的主机密钥指纹，再按终端提示登录。密码只在系统终端中输入。</p>
+      </details>
+      <details id="ssh-ai" hidden><summary>桃桃 AI 主机名检查</summary>
+        <p>允许后，桃桃 AI 可用这台电脑已验证的主机密钥和免交互登录方式读取设备主机名。</p>
+        <button type="button" id="ssh-permission" class="quiet"></button>
+      </details>
+      <p id="ssh-result" role="status"></p>
+      <footer class="ssh-actions"><button id="ssh-save" type="button" class="quiet">仅保存</button><button id="ssh-connect" type="submit" class="primary">保存并连接</button></footer>
+    </form>
+  </dialog>
   <dialog id="book-dialog" class="chat-dialog">
     <h3>私密便签</h3>
     <form id="book-auth" class="fields">
