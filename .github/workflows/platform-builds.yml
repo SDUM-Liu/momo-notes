@@ -54,6 +54,7 @@ jobs:
         run: |
           node --test tests/host-updates.cjs tests/codex-access.cjs tests/migration.cjs tests/private-pages.cjs tests/private-media.cjs tests/media-transfer.cjs tests/ssh-connect.cjs tests/ssh-hints.cjs
           npm ci --prefix relay
+          node --test tests/ssh-session.cjs tests/ssh-offer.cjs tests/desktop-ssh-remote.cjs
           npm install --prefix "$RUNNER_TEMP/momo-test" playwright@1.65.1
           npm run build
           MOMO_LARGE_MEDIA=1 MOMO_BROWSER_CHANNEL=chrome MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" node tests/mobile-media.cjs
@@ -90,7 +91,7 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platforms;android-36 build-tools;36.0.0
-      - run: bash gradlew --no-daemon assembleRelease
+      - run: bash gradlew --no-daemon testReleaseUnitTest assembleRelease
         working-directory: android
       - name: Sign and verify the Android release
         if: github.ref == 'refs/heads/main'

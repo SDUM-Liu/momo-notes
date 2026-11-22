@@ -508,6 +508,17 @@ export function createMobileBridge() {
     onNotes: callback => { onNotes = callback },
     onSync: callback => { onSync = callback },
     async syncState() { await init; return syncStatus() },
+    ...(native && Capacitor.isPluginAvailable('MomoSync') && document.documentElement.dataset.momoFloating !== 'true' && {
+      sshRoutes: scope => sync.sshRoutes(scope),
+      sshOffer: (...args) => sync.sshOffer(...args),
+      sshLocalOpen: args => {
+        if (hostSelected || changingRole || !sync.state().enabled || document.hidden) throw new Error('请在已配对的从设备前台允许连接')
+        return syncTransport.sshLocalOpen(args)
+      },
+      sshLocalRead: args => syncTransport.sshLocalRead(args),
+      sshLocalWrite: args => syncTransport.sshLocalWrite(args),
+      sshLocalClose: args => syncTransport.sshLocalClose(args),
+    }),
     async sshHint(scope, value) {
       await init
       if (hostSelected || changingRole) throw new Error('请在已配对的从设备操作')

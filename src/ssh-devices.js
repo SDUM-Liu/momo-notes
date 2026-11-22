@@ -50,7 +50,9 @@ export function wireSSHDevices(api, errorMessage) {
     const connection = profile ? addressText(profile) : device.sshHint ? '已分享 SSH 地址' : '待设置 SSH'
     row.caption.textContent = (device.online ? '同步在线' : '同步离线') + (canConnect ? ' · ' + connection : '')
     if (!canConnect) return
-    row.connect.textContent = profile ? '连接' : '设置连接'
+    const remote = Boolean(device.sshRemoteReady && api.deviceSSHRemote)
+    row.connect.textContent = remote ? '异地连接' : profile ? '连接' : '设置连接'
+    if (remote) row.caption.textContent = '从设备已允许本次互联网连接'
     row.connect.disabled = row.loading || row.connecting
     row.edit.hidden = !profile
   }
@@ -111,7 +113,7 @@ export function wireSSHDevices(api, errorMessage) {
     $('ssh-hint').hidden = !hint && Boolean(row.profile || session.legacy)
     $('ssh-hint').textContent = hint
       ? canFill ? '已填入从设备分享的信息，核对后即可连接。' : '从设备分享了 ' + target
-      : '可以手动填写，也可以先在从设备的「设置 → 设备同步」点「分享本设备的 SSH 地址」。'
+      : '异地使用时，在从设备的「设置 → 设备同步」点「允许一次异地连接」，然后返回设备列表。手动直连可在这里填地址。'
     $('ssh-use-hint').hidden = !hint || addressText(draft()) === target
     updateControls(session)
   }
@@ -144,6 +146,16 @@ export function wireSSHDevices(api, errorMessage) {
   }
 
   async function launch(row) {
+    if (row.device.sshRemoteReady && api.deviceSSHRemote) {
+      row.connecting = true
+      updateRow(row)
+      try {
+        await api.deviceSSHRemote(row.device.id)
+        status.textContent = '已为 ' + labelFor(row.device) + ' 打开异地 SSH 终端，请在终端内登录。'
+      } catch (error) { status.textContent = errorMessage(error) }
+      finally { row.connecting = false; updateRow(row) }
+      return
+    }
     if (!row.profile) { edit(row); return }
     row.connecting = true
     updateRow(row)

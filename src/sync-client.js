@@ -155,6 +155,22 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       error = '主机连接中断，等待重新同步'
       change(state())
     },
+    sshRoutes(scope) {
+      if (switching || !pair || scope !== pair.room) throw new Error('请先配对并连接主设备')
+      return [pair.relay, pair.fallback].filter(Boolean)
+    },
+    async sshOffer(scope, grant, room) {
+      if (switching || !pair || scope !== pair.room) throw new Error('请在当前配对的从设备操作')
+      const connection = pair, device = identity(connection)
+      if (!device) throw new Error('当前设备身份不可用')
+      try {
+        await request(connection, grant ? 'ssh-offer/set' : 'ssh-offer/end', { device, grant, room })
+        if (connection !== pair || switching) throw new Error('配对已变更，请重新允许连接')
+      } catch (error) {
+        if (/未知的同步请求|同步锁已失效/.test(error.message)) throw new Error('请先将主设备更新到支持异地 SSH 的版本')
+        throw error
+      }
+    },
     async sshHint(scope, value) {
       const connection = pair
       if (!connection || switching || scope !== connection.room) throw new Error('请打开当前已配对主设备的共享设置')

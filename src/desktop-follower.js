@@ -48,6 +48,8 @@ export function desktopFollower(api) {
       const follower = sync.state()
       return follower.enabled ? follower : api.syncState()
     },
+    sshOffer: (...args) => sync.sshOffer(...args),
+    sshRoutes: scope => sync.sshRoutes(scope),
     async sshHint(scope, value) { await initial; return sync.sshHint(scope, value) },
     onSync(callback) { receive = callback },
     testSync: async code => { await initial; return sync.test(code) },

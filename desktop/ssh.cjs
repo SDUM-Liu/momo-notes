@@ -86,8 +86,23 @@ const windowsSessionScript = [
   'exit $status',
 ].join('\n')
 
-async function openTerminal(input, mode = 'terminal') {
-  const args = sshArguments(input, mode)
+function remoteSSHArguments(id, user, port) {
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) throw new Error('设备标识无效')
+  const target = normalizeProfile({ host: '127.0.0.1', user, port })
+  return ['-F', 'none', '-o', 'StrictHostKeyChecking=ask', '-o', 'HostKeyAlias=momo-device-' + id,
+    '-o', 'CheckHostIP=no', '-o', 'ClearAllForwardings=yes', '-o', 'ConnectTimeout=45',
+    '-p', String(target.port), '-l', target.user, target.host]
+}
+
+function openTerminal(input, mode = 'terminal') {
+  return launchTerminal(sshArguments(input, mode))
+}
+
+function openRemoteTerminal(id, user, port) {
+  return launchTerminal(remoteSSHArguments(id, user, port))
+}
+
+async function launchTerminal(args) {
   try {
     await run('ssh', ['-V'], { timeout: 4000, windowsHide: true })
   } catch {
@@ -130,4 +145,5 @@ async function hostName(profile) {
   return name
 }
 
-module.exports = { normalizeProfile, sameTarget, deviceProfiles, sshArguments, openTerminal, hostName, windowsSessionScript }
+module.exports = { normalizeProfile, sameTarget, deviceProfiles, sshArguments, openTerminal, hostName, windowsSessionScript,
+  remoteSSHArguments, openRemoteTerminal }

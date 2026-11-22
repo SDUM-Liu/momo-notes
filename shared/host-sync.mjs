@@ -11,6 +11,7 @@ const sshOwner = proof => typeof proof === 'string' && /^[a-f0-9]{64}$/.test(pro
 export function createHostSync({ config = {}, store, ask, notify, codex, update, defaults, relayOverride, persist }) {
   const replay = new Map()
   const lastSeen = new Map()
+  const sshOffers = new Map()
   function recordDevice(value) {
     if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(value?.id) ||
         !['Android','iPhone','iPad','Windows','Mac','Linux','设备'].includes(value.platform)) return
@@ -82,6 +83,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
   function state() {
     return { role: 'host', devices: (config.devices || []).map(d => ({ id: d.id, platform: d.platform,
       ...(d.sshHint && { sshHint: d.sshHint }),
+      ...(sshOffers.get(d.id)?.until > Date.now() && { sshRemoteReady: true }),
       online: enabled() && Date.now() - (lastSeen.get(d.id) || 0) < 65000 })), enabled: enabled(), relay: relay(), fallback: backup(),
       onlineRelay: routes().find(url => statuses.get(url) === 'online'),
       status: enabled() ? status() : 'offline', locked: Boolean(lease) }
@@ -102,10 +104,23 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
   }
 
   async function processRequest({ op, payload, token }) {
-    if (op === 'ssh-hint/get' || op === 'ssh-hint/set') {
+    if (['ssh-hint/get', 'ssh-hint/set', 'ssh-offer/set', 'ssh-offer/end'].includes(op)) {
       const device = config.devices?.find(d => d.id === payload?.device?.id)
       const owner = sshOwner(payload?.device?.sshProof)
       if (!owner || device?.sshOwner !== owner) throw new Error('无法确认设备身份，请先在当前从设备完成同步')
+      if (op === 'ssh-offer/end') {
+        if (sshOffers.get(device.id)?.grant.room === payload.room) sshOffers.delete(device.id)
+        return true
+      }
+      if (op === 'ssh-offer/set') {
+        const grant = payload.grant
+        if (!grant || !routes().includes(grant.relay) || ![grant.key, grant.room].every(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v))) {
+          throw new Error('异地连接邀请无效')
+        }
+        const { username } = normalizeSSHShareHint({ host: '127.0.0.1', username: grant.user, port: 22 })
+        sshOffers.set(device.id, { grant: { relay: grant.relay, room: grant.room, key: grant.key, user: username }, until: Date.now() + 120000 })
+        return true
+      }
       if (op === 'ssh-hint/set') {
         const hint = payload.hint === null ? null : normalizeSSHShareHint(payload.hint)
         if (hint) device.sshHint = hint
@@ -214,6 +229,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     } else {
       unlock()
     }
+    sshOffers.clear()
     statuses.clear()
     config.enabled = Boolean(value)
     persist()
@@ -222,6 +238,12 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
 
   return {
     state,
+    takeSSHOffer(id) {
+      const entry = sshOffers.get(id)
+      sshOffers.delete(id)
+      if (!enabled() || !entry || entry.until <= Date.now()) throw new Error('请先在从设备允许一次异地 SSH 连接')
+      return entry.grant
+    },
     owns(key) { return config.key === key },
     requireWritable,
     write(payload) {
@@ -270,6 +292,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       if (!enabled()) throw new Error('请先开启主机同步')
       config.devices = []
       lastSeen.clear()
+      sshOffers.clear()
       config.key = randomHex()
       config.owner = randomHex()
       persist()

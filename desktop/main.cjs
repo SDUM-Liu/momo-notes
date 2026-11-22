@@ -8,7 +8,9 @@ const { createUpdates } = require('./updates.cjs')
 const { desktopUpdateSource } = require('./update-source.cjs')
 const { createInstallerDownloads } = require('./installers.cjs')
 const { createBrowser } = require('./browser.cjs')
-const { normalizeProfile, sameTarget, deviceProfiles, openTerminal, hostName } = require('./ssh.cjs')
+const { normalizeProfile, sameTarget, deviceProfiles, openTerminal, openRemoteTerminal, hostName } = require('./ssh.cjs')
+const { createLocalSSHPipes, createRemoteSSHHost } = require('./ssh-remote.cjs')
+const { joinSSHRelay } = require('../shared/ssh-session.mjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort } = require('../shared/ai.mjs')
 const { codexSetupUrl } = require('../shared/links.mjs')
@@ -29,6 +31,7 @@ let win, tray, store, drag, anchor, edge, today, dayTimer, updates, installers, 
 const migration = require('./migration.cjs')
 let transfer
 let sshDevices
+let remoteSSH, localSSH
 let profileDirectory
 let book
 let mode = 'pet'
@@ -136,6 +139,10 @@ function codexAction(op, data, paired = false) {
 function requireSSHDevice(id) {
   if (follower.store || !sync.state().devices.some(device => device.id === id))
     throw new Error('请在主设备选择已登记的设备')
+}
+function stopSSH() {
+  remoteSSH?.stop()
+  localSSH?.stop()
 }
 async function reportDevice(prefix, data, paired) {
   if (paired && !codex.settings().enabled) throw new Error('请先开启桃桃 AI 共享')
@@ -274,6 +281,12 @@ function registerIPC() {
     sshDevices.permit(id, alias !== '')
     return alias
   })
+  handle('device:ssh-remote', id => {
+    requireSSHDevice(id)
+    if (!sync.state().enabled) throw new Error('请先开启主设备同步')
+    return remoteSSH.open(id)
+  })
+  for (const method of ['open', 'read', 'write', 'close']) handle('ssh-local:' + method, localSSH[method])
   handle('device:ssh', (id, alias) => {
     requireSSHDevice(id)
     return openTerminal({ alias }, 'known-terminal')
@@ -296,10 +309,16 @@ function registerIPC() {
   handle('sync:state', sync.state)
   handle('sync:enable', (enabled, ...args) => {
     if (enabled && follower.store) throw new Error('请先取消从设备配对，再开启主设备同步')
-    return sync.setEnabled(enabled, ...args)
+    const result = sync.setEnabled(enabled, ...args)
+    stopSSH()
+    return result
   })
   handle('sync:code', sync.code)
-  handle('sync:rotate', sync.rotate)
+  handle('sync:rotate', () => {
+    const result = sync.rotate()
+    stopSSH()
+    return result
+  })
   handle('sync:link', sync.link)
   handle('sync:status', sync.status)
   handle('sync:exchange', sync.exchange)
@@ -499,6 +518,8 @@ function start() {
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
+  win.webContents.on('render-process-gone', stopSSH)
+  win.webContents.on('did-start-loading', stopSSH)
   win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   updates = createUpdates(value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
@@ -520,6 +541,7 @@ function start() {
   }, change => {
     if (quitting || win.isDestroyed()) return
     if (change.profileChanged) {
+      stopSSH()
       lockBook()
       today = follower.store ? localDay() : store.today()
       updates.source(follower.snapshot()?.id)
@@ -533,6 +555,8 @@ function start() {
   sync = createSync(profileDirectory, store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
   }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort))
+  localSSH = createLocalSSHPipes({ isPaired: () => Boolean(!quitting && follower.store && !sync.state().enabled) })
+  remoteSSH = createRemoteSSHHost({ takeOffer: id => sync.takeSSHOffer(id), join: joinSSHRelay, launch: openRemoteTerminal })
   transfer = require('./handoff.cjs').handoff({ root: app.getPath('userData'), directory: profileDirectory,
     sync, follower, credentials: safeStorage, snapshot: () => migration.snapshot(profileDirectory, store, safeStorage),
     check() {
@@ -575,6 +599,7 @@ if (app.requestSingleInstanceLock()) {
   })
   app.on('before-quit', () => {
     quitting = true
+    stopSSH()
     clearInterval(dayTimer)
     updates?.stop()
     installers?.stop()

@@ -18,6 +18,7 @@ import perch from './assets/perch.png'
 import defaultEdge from './assets/edge.png'
 import { wireHandoff } from './handoff.js'
 import { wirePrivateBook } from './private-book.js'
+import { wireRemoteSSH } from './ssh-offer.js'
 import { wireSSHSharing } from './ssh-sharing.js'
 import { wireSSHDevices } from './ssh-devices.js'
 import './style.css'
@@ -936,10 +937,12 @@ async function connectHostLink() {
   stopHostLink = () => links.forEach(stop => stop())
 }
 
+const drawRemoteSSH = wireRemoteSSH(api, errorMessage)
 const drawSSHSharing = wireSSHSharing(api, errorMessage)
 const drawDeviceList = wireSSHDevices(api, errorMessage)
-setInterval(() => { if (view === 'sync') void api.syncState().then(drawSync).catch(() => {}) }, 10000)
+setInterval(() => { if (view === 'sync') void api.syncState().then(drawSync).catch(() => {}) }, 4000)
 function drawSync(value) {
+  drawRemoteSSH(value)
   drawSSHSharing(value)
   drawDeviceList(value.devices || [])
   syncState = value

@@ -32,6 +32,7 @@ async function mount(page, mobile) {
         window.launches.push({ id, profile: target })
         return target
       },
+      async deviceSSHRemote(id) { window.launches.push({ id, remote: true }) },
       async deviceSSHPermission() { return false },
     }
     const { wireSSHDevices } = await import('/src/ssh-devices.js')
@@ -129,6 +130,9 @@ async function test() {
     await connect.click()
     assert.deepEqual(await page.evaluate(() => window.launches[1]), { id: phone.id, profile: chosen })
 
+    await draw([{ ...phone, sshRemoteReady: true }])
+    await list.getByRole('button', { name: '异地连接' }).click()
+    assert.deepEqual(await page.evaluate(() => window.launches.at(-1)), { id: phone.id, remote: true })
     await mount(page, true)
     await draw([phone])
     assert((await list.innerText()).includes('Android'))

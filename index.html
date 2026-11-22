@@ -186,6 +186,7 @@
           <button id="sync-enable" class="primary">开启主机同步</button>
           <section class="ssh-devices" aria-labelledby="ssh-list-title">
             <h2 id="ssh-list-title">绑定设备<span class="desktop-only"> · SSH</span></h2>
+            <p class="desktop-only">异地使用时，在从设备的「设备同步」中允许一次连接，这里会出现「异地连接」。</p>
             <div id="sync-device-list"></div>
             <p id="ssh-list-status" role="status"></p>
           </section>
@@ -208,8 +209,22 @@
           <button id="sync-drafts" class="quiet" type="button">查看本机未合并的草稿</button>
           <textarea id="sync-draft-text" aria-label="本机未合并的草稿" readonly hidden></textarea>
         </form>
+        <section id="remote-ssh" class="ssh-devices" hidden aria-labelledby="remote-ssh-title">
+          <h2 id="remote-ssh-title">通过互联网连接本设备</h2>
+          <p>从设备和电脑可以使用不同的网络。先在本设备启动 SSH 服务，再允许电脑连接一次。</p>
+          <form id="remote-ssh-form">
+            <div class="ssh-pair">
+              <label class="ssh-field">SSH 用户名<input id="remote-ssh-user" maxlength="128" required autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+              <label class="ssh-field">本机 SSH 端口<input id="remote-ssh-port" type="number" min="1" max="65535" required></label>
+            </div>
+            <details id="remote-ssh-help"><summary>如何启动 SSH 服务？</summary><p id="remote-ssh-guide"></p><button type="button" id="remote-ssh-termux" class="quiet" hidden>查看 Termux 官方下载入口</button></details>
+            <button id="remote-ssh-start" type="submit" class="primary">允许一次异地连接</button>
+            <button id="remote-ssh-stop" type="button" class="quiet" hidden>结束连接</button>
+          </form>
+          <p id="remote-ssh-status" role="status"></p>
+        </section>
         <details id="ssh-share" hidden>
-          <summary>分享本设备的 SSH 地址</summary>
+          <summary>手动直连 · 分享 SSH 地址</summary>
           <p>先在本设备开启 SSH 服务，再把登录信息分享给已配对的主设备。</p>
           <form id="ssh-share-form">
             <fieldset>
@@ -388,7 +403,7 @@
       <label class="ssh-field" id="ssh-alias-field" hidden>SSH 别名<input id="ssh-alias" disabled required maxlength="128" placeholder="这台电脑的 SSH 配置中已有的 Host" autocomplete="off" spellcheck="false"></label>
       <details id="ssh-help"><summary>第一次连接？</summary>
         <p id="ssh-platform-help"></p>
-        <p>使用局域网地址时，让两台设备连同一个 Wi-Fi。异地连接需要电脑能访问的 SSH 地址。便签同步中继只传递这里填写的连接信息。</p>
+        <p>使用局域网地址时，让两台设备连同一个 Wi-Fi。异地连接需要电脑能访问的 SSH 地址。手机用流量时，可从设备列表选择「异地连接」。</p>
         <p>第一次连接时，在终端核对目标设备的主机密钥指纹，再按终端提示登录。密码只在系统终端中输入。</p>
       </details>
       <details id="ssh-ai" hidden><summary>桃桃 AI 主机名检查</summary>

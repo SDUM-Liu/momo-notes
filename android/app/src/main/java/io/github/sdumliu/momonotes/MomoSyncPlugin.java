@@ -8,6 +8,8 @@ import android.net.NetworkCapabilities;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -26,6 +28,7 @@ import org.json.JSONObject;
 
 @CapacitorPlugin(name = "MomoSync")
 public class MomoSyncPlugin extends Plugin {
+    private final LocalSsh ssh = new LocalSsh();
     private final OkHttpClient client = new OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS).readTimeout(5, TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build();
@@ -33,6 +36,52 @@ public class MomoSyncPlugin extends Plugin {
     private java.io.OutputStream backupStream;
     private android.net.Uri backupUri;
     private String backupToken;
+
+    @PluginMethod
+    public void sshLocalOpen(PluginCall call) {
+        sshReply(call, ssh.open(call.getInt("port")), "id");
+    }
+
+    @PluginMethod
+    public void sshLocalRead(PluginCall call) {
+        sshReply(call, ssh.read(call.getString("id")), "data");
+    }
+
+    @PluginMethod
+    public void sshLocalWrite(PluginCall call) {
+        sshReply(call, ssh.write(call.getString("id"), call.getString("data")), null);
+    }
+
+    @PluginMethod
+    public void sshLocalClose(PluginCall call) {
+        ssh.close(call.getString("id"));
+        call.resolve();
+    }
+
+    private void sshReply(PluginCall call, CompletableFuture<?> operation, String key) {
+        operation.whenComplete((value, error) -> {
+            if (error != null) {
+                Throwable why = error instanceof CompletionException ? error.getCause() : error;
+                call.reject(why.getMessage());
+                return;
+            }
+            JSObject result = new JSObject();
+            if (key != null) result.put(key, value != null ? value : JSONObject.NULL);
+            call.resolve(result);
+        });
+    }
+
+    @Override
+    protected void handleOnResume() {
+        super.handleOnResume();
+        ssh.setForeground(true);
+    }
+
+    @Override
+    protected void handleOnPause() {
+        ssh.setForeground(false);
+        super.handleOnPause();
+    }
 
     @PluginMethod
     public void wifiAddress(PluginCall call) {
@@ -120,6 +169,7 @@ public class MomoSyncPlugin extends Plugin {
 
     @Override
     protected synchronized void handleOnDestroy() {
+        ssh.destroy();
         try { finishBackup(true); } catch (IOException ignored) { }
         super.handleOnDestroy();
     }
