@@ -1,0 +1,290 @@
+#private-drive, .private-drive {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.private-drive {
+  border-top: 1px solid var(--line);
+}
+
+.drive-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 15px 10px;
+}
+
+.drive-bar h2, .drive-preview-bar h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.drive-count, .drive-detail {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.drive-upload, .drive-text-button, .drive-confirm, .drive-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-weight: 600;
+}
+
+.drive-upload, .drive-confirm {
+  background: var(--accent);
+  color: white;
+}
+
+.drive-upload {
+  margin-inline-start: auto;
+}
+
+.drive-upload:hover, .drive-confirm:hover {
+  background: #78384d;
+}
+
+.drive-icon, .drive-icon svg {
+  display: block;
+  flex: none;
+}
+
+.drive-list {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(min(125px, 100%), 1fr));
+  gap: 10px;
+  padding: 2px 15px 14px;
+}
+
+.drive-file {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 0 9px;
+  background: #fffdfb;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  text-align: start;
+}
+
+.drive-file:hover {
+  border-color: #cba4b2;
+  background: #fff9f8;
+}
+
+.drive-name, .drive-file .drive-detail {
+  margin-inline: 9px;
+}
+
+.drive-name {
+  overflow: hidden;
+  margin-top: 8px;
+  margin-bottom: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.drive-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1.85;
+}
+
+.drive-thumb .drive-icon svg {
+  width: 27px;
+  height: 27px;
+  stroke-width: 1.6;
+}
+
+.drive-image {
+  color: #557269;
+  background: #e4efea;
+}
+
+.drive-video {
+  color: #6e6189;
+  background: #eee9f4;
+}
+
+.drive-audio {
+  color: #9a5f47;
+  background: #f7e7df;
+}
+
+.drive-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.drive-list:has(.drive-empty) {
+  display: flex;
+  align-items: stretch;
+}
+
+.drive-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 100px;
+  padding: 12px;
+  border: 1px dashed #dfcbd4;
+  border-radius: 10px;
+  background: #fcf5f5;
+  color: var(--muted);
+  text-align: center;
+}
+
+.drive-empty strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.drive-empty .drive-icon {
+  margin-bottom: 4px;
+  color: var(--accent);
+}
+
+.drive-empty .drive-icon svg {
+  width: 31px;
+  height: 31px;
+  stroke-width: 1.5;
+}
+
+.drive-dropping .drive-list {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: #f7e7ed;
+}
+
+.drive-status {
+  flex: none;
+  margin: 0;
+  padding: 5px 15px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.drive-status:empty {
+  padding: 0;
+}
+
+.drive-preview[open] {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, calc(100% - 28px));
+  max-height: min(80dvh, calc(100% - 24px));
+  overflow: auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 10px 40px #38222e38;
+}
+
+.drive-preview::backdrop {
+  background: #30222c77;
+}
+
+.drive-preview-bar, .drive-preview-foot {
+  flex: none;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.drive-preview-bar h2 {
+  flex: 1;
+  padding-inline-start: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-close, .drive-text-button {
+  background: transparent;
+  color: var(--accent);
+}
+
+.drive-close {
+  width: 32px;
+  color: var(--ink);
+}
+
+.drive-close:hover, .drive-text-button:hover {
+  background: #f4e5ec;
+}
+
+.drive-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 66px;
+  overflow: hidden;
+  background: #241d25;
+}
+
+.drive-stage img, .drive-stage video {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  max-height: min(57dvh, 440px);
+  object-fit: contain;
+}
+
+.drive-stage .drive-icon {
+  margin-top: 16px;
+  color: #f5c9b6;
+}
+
+.drive-stage .drive-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.drive-stage audio {
+  display: block;
+  width: calc(100% - 20px);
+  max-width: 430px;
+  margin: 2px 10px 12px;
+}
+
+.drive-unsupported {
+  margin: 12px;
+  color: white;
+  text-align: center;
+}
+
+.drive-preview-foot .drive-detail {
+  margin-inline-end: auto;
+}

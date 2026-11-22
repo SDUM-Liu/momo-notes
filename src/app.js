@@ -1,3 +1,4 @@
+import { wirePrivateDrive } from './private-drive.js'
 import { privatePages } from './private-pages.js'
 import { Editor, Node } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
@@ -88,7 +89,9 @@ let readOnly = false
 let retryOnUnlock = false
 let composingEdit = false
 let pendingNoteChange
-let privateStore, ordinaryPage, privateTimer, switchingBook = false
+let privateStore, ordinaryPage, privateTimer, drive, switchingBook = false
+let privateArchive = false
+let pendingDriveSave = Promise.resolve()
 const noteStore = () => privateStore || api
 const photoTypes = $('image-input').accept
 const noteMedia = Node.create({
@@ -104,8 +107,35 @@ const noteMedia = Node.create({
   },
 })
 
+function showDrive(store) {
+  if (!drive) {
+    drive = wirePrivateDrive($('private-drive'), {
+      save(files) {
+        if (store !== privateStore) throw new Error('已锁定')
+        const write = store.saveFiles(files)
+        pendingDriveSave = write.catch(() => {})
+        return write
+      },
+      picker: active => api.privatePicker?.(active),
+    })
+  }
+  $('private-drive').hidden = false
+  drive.show(store.files)
+  $('note-toolbar').hidden = $('editor').hidden = $('note-footer').hidden = true
+  $('note-date-line').hidden = $('history').hidden = true
+}
+function closeDrive() {
+  drive?.dispose()
+  drive = undefined
+  $('private-drive').hidden = true
+  $('note-toolbar').hidden = $('editor').hidden = $('note-footer').hidden = false
+  $('history').hidden = false
+}
+
 function resetPageContext() {
   ++pageRequest; ++editGeneration
+  closeDrive()
+  privateArchive = false
   finishPicker()
   composingEdit = followNewDay = retryOnUnlock = previousSaveError = false
   pendingNoteChange = undefined; currentDate = undefined
@@ -119,6 +149,9 @@ function resetPageContext() {
 function syncBookControls() {
   const active = Boolean(privateStore)
   $('book-return').hidden = !active
+  document.querySelector('[data-edit="taskList"]').hidden = active
+  $('note-date-line').hidden = active
+  $('return-today').textContent = active ? '返回主页' : '回到今天'
   $('note-title').textContent = active ? '私密便签' : '桃桃便签'
   $('settings-codex').disabled = $('question').disabled = active || Boolean(state.mobileHost)
   $('image-input').accept = active ? photoTypes + ',audio/*,video/*' : photoTypes
@@ -152,7 +185,10 @@ async function endPrivatePages(forced = false) {
   try {
     if (!forced) await saveBeforeSwitch()
     if (privateStore !== store) return
-    const pendingSaves = saveQueue
+    // A forced lock clears preview and file references immediately; explicit locks
+    // wait for the active file operation in saveBeforeSwitch.
+    const pendingSaves = Promise.all([saveQueue, pendingDriveSave])
+    pendingDriveSave = Promise.resolve()
     clearTimeout(privateTimer)
     const profile = profileRevision
     const back = ordinaryPage
@@ -212,7 +248,7 @@ function showView(next) {
   $('category-form').hidden = true
   mascotLabel()
   if (next === 'browser') sendBrowserViewport()
-  if (next === 'note' && followNewDay && !editor.view.composing) void loadNote()
+  if (!privateStore && next === 'note' && followNewDay && !editor.view.composing) void loadNote()
 }
 
 function drawState(value) {
@@ -294,11 +330,13 @@ function setReadOnly(value) {
 }
 
 function drawDate() {
+  $('note-date-line').hidden = Boolean(privateStore && !privateArchive)
+  if ($('note-date-line').hidden) return
   const date = noteDate(currentDate)
   const isToday = currentDate === today
   $('note-date').textContent = dayFormat.format(date)
-  $('date-caption').textContent = (isToday ? '今天 · ' : date.getFullYear() + ' 年 · ') + weekFormat.format(date)
-  $('return-today').hidden = isToday
+  $('date-caption').textContent = (privateStore ? '历史页 · ' : isToday ? '今天 · ' : date.getFullYear() + ' 年 · ') + weekFormat.format(date)
+  $('return-today').hidden = !privateStore && isToday
 }
 
 function drawProgress() {
@@ -346,6 +384,7 @@ function saveDocument(doc) {
 }
 
 async function saveBeforeSwitch() {
+  await drive?.flush()
   if (composingEdit && editor && currentDate) {
     composingEdit = false
     saveDocument(editor.getJSON())
@@ -364,15 +403,28 @@ async function loadNote(date, selected = category, navigate = true) {
   try {
     await saveBeforeSwitch()
     if (request !== pageRequest) return
+    if (privateStore && selected === 'finds') {
+      category = selected
+      currentDate = undefined
+      privateArchive = false
+      editor.commands.setContent({type:'doc',content:[{type:'paragraph'}]}, { emitUpdate: false })
+      showDrive(privateStore)
+      markCategory()
+      if (navigate) showView('note')
+      return
+    }
     const page = await noteStore().openNote(date, selected)
     if (request !== pageRequest) return
+    if (drive) closeDrive()
     if (currentDate !== page.date || category !== page.category) editor.commands.setContent(page.doc, { emitUpdate: false })
     category = page.category
     markCategory()
     currentDate = page.date
     today = page.today
     revisions.set(noteKey(category, currentDate), page.rev)
-    visited.set(category, currentDate === today ? null : currentDate)
+    privateArchive = Boolean(privateStore && page.isArchive)
+    visited.set(category, (privateStore ? !privateArchive : currentDate === today) ? null : currentDate)
+    $('history').hidden = Boolean(privateStore && privateStore.listDates(category).length < 2)
     drawDate()
     drawProgress()
     noteStatus('已保存')
@@ -591,7 +643,7 @@ $('history').onclick = async () => {
     for (const date of dates) {
       const button = document.createElement('button')
       const title = document.createElement('span')
-      title.textContent = date === today ? '今天' : dayFormat.format(noteDate(date))
+      title.textContent = privateStore ? dayFormat.format(noteDate(date)) : date === today ? '今天' : dayFormat.format(noteDate(date))
       const stamp = document.createElement('time')
       stamp.dateTime = date
       stamp.textContent = date
@@ -1246,14 +1298,14 @@ function createEditor() {
     element: $('editor'),
     extensions: [
       StarterKit.configure({ link: { openOnClick: false, defaultProtocol: 'https', isAllowedUri: url => Boolean(linkOrNull(url)) } }),
-      TaskList, TaskItem.configure({
+      ...(privateStore ? [] : [TaskList, TaskItem.configure({
         nested: true,
         a11y: { checkboxLabel: node => node.attrs.checked ? '恢复为待办' : '标记完成' },
-      }),
+      })]),
       Image.configure({ allowBase64: true, resize: { enabled: true, minWidth: 40, minHeight: 30 } }),
       ...(privateStore ? [noteMedia] : []),
       TableKit.configure({ table: { resizable: true } }),
-      Placeholder.configure({ placeholder: '写下一件待办…', includeChildren: true }),
+      Placeholder.configure({ placeholder: privateStore ? '写下内容…' : '写下一件待办…', includeChildren: true }),
     ],
     editorProps: {
       attributes: { 'aria-label': '便签正文', spellcheck: 'false' },
@@ -1385,13 +1437,14 @@ async function init() {
   api.onSync?.(drawSync)
   if (api.syncLink) void connectHostLink().catch(error => { $('sync-status').textContent = errorMessage(error) })
   api.onDay(next => {
+    if (privateStore) return
     followNewDay ||= currentDate === today
     today = next
     if (!followNewDay || view !== 'note') {
       if (currentDate) drawDate()
     } else if (editor.view.composing) {
       editor.view.dom.addEventListener('compositionend', () => {
-        if (view === 'note' && followNewDay) void loadNote()
+        if (!privateStore && view === 'note' && followNewDay) void loadNote()
       }, { once: true })
     } else {
       void loadNote()

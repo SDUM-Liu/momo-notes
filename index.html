@@ -30,7 +30,7 @@
           <div id="categories" role="tablist" aria-label="便签分类"></div>
           <button id="new-category" type="button" class="quiet" aria-label="新建分类" title="新建分类">＋</button>
         </div>
-        <div class="date-line">
+        <div id="note-date-line" class="date-line">
           <div id="date-caption" class="date-caption"></div><h1 id="note-date"></h1>
           <button id="return-today" class="quiet" hidden>回到今天</button>
         </div>
@@ -39,7 +39,8 @@
         <input id="category-name" placeholder="输入分类名称" aria-label="分类名称" maxlength="24" required>
         <button type="submit" class="primary">创建</button><button id="category-cancel" type="button" class="quiet">取消</button>
       </form>
-      <div class="toolbar" role="toolbar" aria-label="编辑格式">
+      <section id="private-drive" aria-label="多媒体文件" hidden></section>
+      <div id="note-toolbar" class="toolbar" role="toolbar" aria-label="编辑格式">
         <button data-edit="bold" data-icon="bold" title="粗体 Ctrl+B" aria-label="粗体"></button>
         <button data-edit="italic" data-icon="italic" title="斜体 Ctrl+I" aria-label="斜体"></button>
         <button data-edit="underline" data-icon="underline" title="下划线 Ctrl+U" aria-label="下划线"></button>
@@ -70,7 +71,7 @@
       <p id="note-locked" class="note-lock" role="status" hidden>正在同步，便签暂时只读。</p>
       <textarea id="saved-editor-draft" aria-label="本地未保存草稿" readonly hidden></textarea>
       <button id="reload-shared-note" class="quiet" type="button" hidden>保留草稿并加载主机内容</button>
-      <footer class="foot"><span id="status" role="status"></span><span id="progress"></span></footer>
+      <footer id="note-footer" class="foot"><span id="status" role="status"></span><span id="progress"></span></footer>
     </section>
     <section id="browser-view" class="view" hidden>
       <form id="browser-bar">

@@ -1,6 +1,6 @@
 {
   "name": "momo-notes",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "description": "A desktop and mobile companion for daily notes and checklists",
   "main": "desktop/main.cjs",
   "scripts": {
