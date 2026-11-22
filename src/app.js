@@ -165,6 +165,7 @@ function syncBookControls() {
   $('return-today').textContent = active ? '返回主页' : '回到今天'
   $('note-title').textContent = active ? '私密便签' : '桃桃便签'
   $('settings-codex').disabled = $('question').disabled = active || Boolean(state.mobileHost)
+  $('image-input').multiple = active
   $('image-input').accept = active ? 'image/*,audio/*,video/*' : photoTypes
   const label = active ? '插入图片、视频或录音' : '插入图片'
   $('insert-image').title = label
@@ -1289,7 +1290,10 @@ $('ai-form').onsubmit = async event => {
 }
 
 function imageFiles(transfer) {
-  return [...(transfer?.files ?? [])].filter(file => file.type.startsWith('image/') || (privateStore && /^(audio|video)\//.test(file.type)))
+  return [...(transfer?.files ?? [])].filter(file => {
+    if (!privateStore) return file.type.startsWith('image/')
+    try { return Boolean(privateMediaType(file)) } catch { return false }
+  })
 }
 
 function createEditor() {

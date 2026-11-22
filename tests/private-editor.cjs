@@ -171,8 +171,23 @@ async function test() {
     assert.deepEqual(fs.readdirSync(mediaDir).sort(), beforeFailure)
     assert.equal(await drive.getByRole('button', { name: '预览 partial.webm' }).count(), 0)
 
-    // The picker accepts a path here so Chromium reads a real file from disk.
-    await input.setInputFiles(largeFile)
+    // A large attachment selected in a private text page uses the same drive,
+    // while small files in the same selection stay inline.
+    await page.getByRole('tab', { name: '话题', exact: true }).click()
+    const prompt = page.getByRole('dialog', { name: '保存到私密多媒体？' })
+    async function attachFromText(selection) {
+      const chooser = page.waitForEvent('filechooser')
+      await page.locator('#insert-image').click()
+      await (await chooser).setFiles(selection)
+    }
+    await attachFromText(largeFile)
+    await prompt.getByRole('button', { name: '取消', exact: true }).click()
+    assert(await drive.isHidden())
+    assert.deepEqual(fs.readdirSync(mediaDir).sort(), beforeFailure)
+    await attachFromText([partial, largeFile])
+    await prompt.waitFor()
+    assert.equal(await editor.locator('video[src^="data:video/"]').count(), 1)
+    await prompt.getByRole('button', { name: '上传到多媒体' }).click()
     await openFile('large.wav')
     await checkPlayback('audio')
     const largePlayer = preview.locator('audio')
@@ -224,6 +239,8 @@ async function test() {
     assert(stored.categories.some(category => category.name === '自定义'))
     const topic = JSON.stringify(stored.notes['stories__' + stored.homes.stories])
     assert(topic.includes('private-marker') && topic.includes('"type":"table"'))
+    assert(topic.includes('partial.webm') && topic.includes('"type":"noteMedia"'))
+    assert(!topic.includes('large.wav'))
     assert(JSON.stringify(stored.notes).includes('旧录音说明'))
     for (const name of fs.readdirSync(path.join(profile, 'notes'))) {
       const ordinary = fs.readFileSync(path.join(profile, 'notes', name), 'utf8')

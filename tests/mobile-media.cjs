@@ -1,19 +1,24 @@
 const assert = require('node:assert/strict')
+const http = require('node:http')
 const { chromium } = require(process.env.MOMO_PLAYWRIGHT || 'playwright')
 
 async function test() {
-  const { createServer } = await import('vite')
-  const server = await createServer({
-    logLevel: 'error', server: { host: '127.0.0.1', port: 0 },
-    optimizeDeps: { entries: ['src/mobile-bridge.js', 'src/private-drive.js'] },
-    plugins: [{ name: 'media-test', configureServer(vite) {
-      vite.middlewares.use('/test-mobile', async (_req, res) => {
-        res.setHeader('Content-Type', 'text/html')
-        res.end(await vite.transformIndexHtml('/test-mobile', '<html><head><meta charset=utf-8></head><body></body></html>'))
-      })
-    } }],
+  const { build } = await import('vite')
+  const modules = ['src/mobile-bridge.js','src/mobile-media.js','src/private-drive.js','src/mobile-sealed.js','shared/authenticator.mjs']
+  const entry = Object.fromEntries(modules.map(name => [name, './' + name]))
+  const bundle = await build({
+    logLevel: 'error',
+    build: { write: false, lib: { entry, formats: ['es'], fileName: (_format, name) => name } },
   })
-  await server.listen()
+  const assets = new Map([].concat(bundle).flatMap(output => output.output.map(asset =>
+    ['/' + asset.fileName, asset.type === 'chunk' ? asset.code : asset.source])))
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://localhost').pathname
+    if (url === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<meta charset=utf-8>'); return }
+    if (!assets.has(url)) { res.writeHead(404).end(); return }
+    res.setHeader('Content-Type', 'text/javascript'); res.end(assets.get(url))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   let browser
   try {
     browser = await chromium.launch({
@@ -21,7 +26,7 @@ async function test() {
       args: ['--autoplay-policy=no-user-gesture-required'],
     })
     const page = await browser.newPage({ isMobile: true, hasTouch: true, viewport: { width: 390, height: 800 } })
-    await page.goto('http://127.0.0.1:' + server.httpServer.address().port + '/test-mobile')
+    await page.goto('http://127.0.0.1:' + server.address().port)
     const outcome = await page.evaluate(async largeFile => {
       const { createMobileBridge } = await import('/src/mobile-bridge.js')
       const { mobileMedia, chunkSize } = await import('/src/mobile-media.js')
@@ -201,7 +206,7 @@ async function test() {
     }, Boolean(process.env.MOMO_LARGE_MEDIA))
     assert.deepEqual(outcome, { mobileHost: false, remaining: 0 })
     console.log('Mobile attachment encryption, migration, OPFS/IndexedDB playback and lock isolation passed.')
-  } finally { await browser?.close(); await server.close() }
+  } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)) }
 }
 
 test().catch(error => { console.error(error); process.exitCode = 1 })
