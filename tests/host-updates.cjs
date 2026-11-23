@@ -2,7 +2,8 @@ const assert = require('node:assert/strict')
 const { createHash, randomBytes } = require('node:crypto')
 const { test } = require('node:test')
 const { createUpdateFeed } = require('../desktop/update-feed.cjs')
-const { createUpdateSource, updateBlockSize } = require('../shared/update-transfer.mjs')
+const { desktopUpdateSource } = require('../desktop/update-source.cjs')
+const { updateBlockSize } = require('../shared/update-transfer.mjs')
 const { createHostSync } = require('../shared/host-sync.mjs')
 const { releasePage, releasesApi } = require('../shared/installers.mjs')
 const { seal, unseal } = require('../shared/sync.mjs')
@@ -17,18 +18,41 @@ test('paired desktop updates use the primary device for the manifest and all ins
   const sha256 = createHash('sha256').update(bytes).digest('hex')
   const asset = { id: 1, state: 'uploaded', name, size: bytes.length, digest: 'sha256:' + sha256, browser_download_url: base + name }
   const read = []
-  const update = createUpdateSource(async (url, range) => {
+  const routed = { proxy: 0, system: 0, direct: 0 }
+  const sessions = {
+    defaultSession: { async fetch() { ++routed.system; throw new Error('net::ERR_CONNECTION_RESET') } },
+    fromPartition(name) {
+      if (name === 'momo-update-proxy') return {
+        async setProxy(options) {
+          assert.deepEqual(options, { mode: 'fixed_servers', proxyRules: 'http://127.0.0.1:7890' })
+        },
+        async closeAllConnections() {},
+        async fetch() { ++routed.proxy; throw new Error('net::ERR_CONNECTION_RESET') },
+      }
+      assert.equal(name, 'momo-update-direct')
+      return {
+        async setProxy(options) { assert.deepEqual(options, { mode: 'direct' }) },
+        async fetch(url, { headers }) {
+          ++routed.direct
+          return upstream(url, headers.Range)
+        },
+      }
+    },
+  }
+  const update = desktopUpdateSource(() => '7890', sessions)
+
+  function upstream(url, range) {
     if (url === releasesApi + '/latest') {
-      return { status: 200, data: JSON.stringify({ tag_name: 'v' + version, draft: false, prerelease: false, assets: [asset] }) }
+      return Response.json({ tag_name: 'v' + version, draft: false, prerelease: false, assets: [asset] })
     }
     if (url === base + 'latest.yml') {
-      return { status: 200, data: `version: ${version}\nfiles:\n  - url: ${name}\n    sha512: ${sha512}\n` }
+      return new Response(`version: ${version}\nfiles:\n  - url: ${name}\n    sha512: ${sha512}\n`)
     }
     assert.equal(url, base + name)
     const [, start, end] = /^bytes=(\d+)-(\d+)$/.exec(range).map(Number)
     read.push(start)
-    return { status: 206, range: `bytes ${start}-${end}/${bytes.length}`, data: bytes.subarray(start, end + 1).toString('base64') }
-  })
+    return new Response(bytes.subarray(start, end + 1), { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${bytes.length}` } })
+  }
 
   const config = {}
   const host = createHostSync({ config, defaults: { url: 'https://relay.example.com' }, update,
@@ -53,6 +77,7 @@ test('paired desktop updates use the primary device for the manifest and all ins
     assert.equal(download.status, 200)
     assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes)
     assert.deepEqual(read.sort((a, b) => a - b), [0, updateBlockSize, 2 * updateBlockSize, 3 * updateBlockSize])
+    assert.deepEqual(routed, { proxy: 1, system: 1, direct: 6 })
     assert.equal((await request('update/block', { channel: 'win', version, offset: 1 })).ok, false)
     assert.equal((await request('update/info', { channel: 'unlisted' })).ok, false)
     assert.match((await request('codex/history')).error, /手机作为主设备时/)
@@ -61,4 +86,13 @@ test('paired desktop updates use the primary device for the manifest and all ins
     feed.close()
     host.stop()
   }
+})
+
+test('a failed upstream gives the paired device an actionable primary-device error', async () => {
+  const down = {
+    async setProxy() {},
+    async fetch() { throw new Error('net::ERR_CONNECTION_RESET') },
+  }
+  const source = desktopUpdateSource(() => '', { defaultSession: down, fromPartition: () => down })
+  await assert.rejects(source('info', { channel: 'android' }), /请检查主设备网络或代理/)
 })
