@@ -17,6 +17,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
@@ -35,14 +36,14 @@ import okhttp3.Response;
 public class MomoUpdatesPlugin extends Plugin {
     private static final String APK = "application/vnd.android.package-archive";
     private static final long MAX_BYTES = 256L * 1024 * 1024;
+    private static final int BLOCK = 512 * 1024;
     private static final String REPO = "https://github.com/SDUM-Liu/momo-notes/releases/download/";
     private final OkHttpClient client = new OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(12, TimeUnit.MINUTES).followSslRedirects(false).build();
-    private final AtomicBoolean downloading = new AtomicBoolean();
+    private static final AtomicBoolean downloading = new AtomicBoolean();
     private String relayVersion, relaySha;
     private int relaySize, relayBytes;
-    private MessageDigest relayDigest;
 
     private SharedPreferences preferences() {
         return getContext().getSharedPreferences("momo-updates", android.content.Context.MODE_PRIVATE);
@@ -50,7 +51,25 @@ public class MomoUpdatesPlugin extends Plugin {
 
     private File directory() { return new File(getContext().getCacheDir(), "updates"); }
     private File archive(String version) { return new File(directory(), "update-" + version + ".apk"); }
-    private File partial() { return new File(directory(), "update.part.apk"); }
+    private File partial() { return new File(getContext().getFilesDir(), "update.part.apk"); }
+
+    private void discardPartial() throws IOException {
+        if (partial().exists() && !partial().delete()) throw new IOException("无法重置更新缓存");
+        preferences().edit().remove("partVersion").remove("partSha").remove("partSize").commit();
+    }
+
+    private long preparePartial(String version, long size, String sha) throws IOException {
+        SharedPreferences prefs = preferences();
+        if (!version.equals(prefs.getString("partVersion", "")) ||
+                !sha.equals(prefs.getString("partSha", "")) || size != prefs.getLong("partSize", -1) ||
+                partial().length() > size) {
+            discardPartial();
+            if (!prefs.edit().putString("partVersion", version).putString("partSha", sha).putLong("partSize", size).commit()) {
+                throw new IOException("无法保存续传记录");
+            }
+        }
+        return partial().length();
+    }
 
     private static long versionCode(String version) {
         if (!version.matches("[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}")) return -1;
@@ -69,14 +88,27 @@ public class MomoUpdatesPlugin extends Plugin {
             if (versionCode(version) > installed().getLongVersionCode() && archive(version).isFile()
                     && archive(version).length() == preferences().getLong("size", -1)) return version;
         } catch (PackageManager.NameNotFoundException ignored) {}
-        preferences().edit().clear().apply();
+        preferences().edit().remove("version").remove("size").remove("open").apply();
         if (versionCode(version) >= 0) archive(version).delete();
         return "";
     }
 
     @PluginMethod
     public void pending(PluginCall call) {
-        call.resolve(state("ready", pendingVersion()));
+        String ready = pendingVersion();
+        JSObject result = state("ready", ready);
+        SharedPreferences prefs = preferences();
+        String version = prefs.getString("partVersion", ""), sha = prefs.getString("partSha", "");
+        long size = prefs.getLong("partSize", 0), bytes = partial().length();
+        try {
+            if (ready.isEmpty() && versionCode(version) > installed().getLongVersionCode() && sha.matches("[a-f0-9]{64}") &&
+                bytes > 0 && bytes <= size && size <= MAX_BYTES) {
+                result.put("partial", new JSObject().put("version", version).put("size", size)
+                    .put("sha256", sha).put("name", "Momo-Notes-" + version + "-Android.apk"));
+                result.put("progress", (int)(100 * bytes / size));
+            }
+        } catch (PackageManager.NameNotFoundException ignored) {}
+        call.resolve(result);
     }
 
     @PluginMethod
@@ -98,7 +130,23 @@ public class MomoUpdatesPlugin extends Plugin {
             call.reject("正在下载更新");
             return;
         }
-        Request request = new Request.Builder().url(REPO + "v" + version + "/Momo-Notes-" + version + "-Android.apk").build();
+        final long offset;
+        try {
+            offset = preparePartial(version, size, sha256);
+            if (offset == size) {
+                saveArchive(version, size, sha256);
+                downloading.set(false);
+                call.resolve(state("ready", version));
+                return;
+            }
+        } catch (Exception error) {
+            downloading.set(false);
+            call.reject(error.getMessage(), error);
+            return;
+        }
+        Request request = new Request.Builder().url(REPO + "v" + version + "/Momo-Notes-" + version + "-Android.apk")
+            .header("Range", "bytes=" + offset + "-").header("Accept-Encoding", "identity")
+            .header("Cache-Control", "no-cache").build();
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call request, IOException error) {
@@ -110,18 +158,24 @@ public class MomoUpdatesPlugin extends Plugin {
             public void onResponse(Call request, Response response) {
                 File partial = partial();
                 try (Response closed = response) {
-                    if (!response.isSuccessful() || response.body() == null) throw new IOException("下载安装包失败");
-                    if (!directory().isDirectory() && !directory().mkdirs()) throw new IOException("无法创建更新缓存");
-                    MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                    long received = 0;
+                    boolean full = response.code() == 200;
+                    String expectedRange = "bytes " + offset + "-" + (size - 1) + "/" + size;
+                    if (response.body() == null || (!full && (response.code() != 206 ||
+                        !expectedRange.equals(response.header("Content-Range"))))) throw new IOException("GitHub 未返回正确的安装包分段");
+                    long received = offset;
                     int progress = -1;
-                    try (InputStream input = response.body().byteStream(); FileOutputStream output = new FileOutputStream(partial)) {
+                    try (InputStream input = response.body().byteStream(); FileOutputStream output = new FileOutputStream(partial, true)) {
                         byte[] buffer = new byte[64 * 1024];
+                        // A server ignoring Range must skip the prefix instead of overwriting it.
+                        for (long skip = full ? offset : 0; skip > 0;) {
+                            int count = input.read(buffer, 0, (int)Math.min(skip, buffer.length));
+                            if (count < 0) throw new IOException("安装包传输中断");
+                            skip -= count;
+                        }
                         for (int count; (count = input.read(buffer)) != -1;) {
                             received += count;
                             if (received > size) throw new IOException("安装包大小与发布记录不一致");
                             output.write(buffer, 0, count);
-                            digest.update(buffer, 0, count);
                             int percent = (int) (received * 100 / size);
                             if (percent != progress) {
                                 progress = percent;
@@ -129,13 +183,12 @@ public class MomoUpdatesPlugin extends Plugin {
                             }
                         }
                     }
-                    saveArchive(version, size, sha256, received, digest);
+                    saveArchive(version, size, sha256);
                     call.resolve(state("ready", version));
                 } catch (Exception error) {
                     Log.w("MomoUpdates", "Download or package verification failed", error);
                     call.reject(error.getMessage() == null ? "安装包下载失败" : error.getMessage(), error);
                 } finally {
-                    partial.delete();
                     downloading.set(false);
                 }
             }
@@ -153,14 +206,13 @@ public class MomoUpdatesPlugin extends Plugin {
                     || size <= 0 || size > MAX_BYTES) throw new IOException("没有可验证的新版本安装包");
             if (!downloading.compareAndSet(false, true)) throw new IOException("正在下载更新");
             started = true;
-            if (!directory().isDirectory() && !directory().mkdirs()) throw new IOException("无法创建更新缓存");
-            try (FileOutputStream empty = new FileOutputStream(partial())) {}
-            relayDigest = MessageDigest.getInstance("SHA-256");
+            long bytes = preparePartial(version, size, sha256);
             relayVersion = version;
             relaySha = sha256;
             relaySize = size;
-            relayBytes = 0;
-            call.resolve();
+            relayBytes = (int)bytes;
+            int offset = relayBytes == relaySize ? relaySize : relayBytes / BLOCK * BLOCK;
+            call.resolve(state("downloading", version).put("offset", offset).put("progress", 100 * bytes / size));
         } catch (Exception error) {
             if (started) clearRelay();
             call.reject(error.getMessage(), error);
@@ -169,16 +221,17 @@ public class MomoUpdatesPlugin extends Plugin {
 
     @PluginMethod
     public synchronized void appendRelay(PluginCall call) {
-        if (relayDigest == null) { call.reject("主设备下载尚未开始"); return; }
+        if (relayVersion == null) { call.reject("主设备下载尚未开始"); return; }
         try {
             String data = call.getString("data", "");
             if (data.length() > 700_000) throw new IOException("安装包分段超出大小限制");
             byte[] bytes = Base64.decode(data, Base64.DEFAULT);
-            int expected = Math.min(512 * 1024, relaySize - relayBytes);
+            int offset = relayBytes / BLOCK * BLOCK;
+            int prefix = relayBytes - offset;
+            int expected = Math.min(BLOCK, relaySize - offset);
             if (expected <= 0 || bytes.length != expected) throw new IOException("主设备返回的安装包分段大小有误");
-            try (FileOutputStream output = new FileOutputStream(partial(), true)) { output.write(bytes); }
-            relayDigest.update(bytes);
-            relayBytes += bytes.length;
+            try (FileOutputStream output = new FileOutputStream(partial(), true)) { output.write(bytes, prefix, bytes.length - prefix); }
+            relayBytes += bytes.length - prefix;
             call.resolve(state("downloading", relayVersion).put("progress", (int) (100L * relayBytes / relaySize)));
         } catch (Exception error) {
             clearRelay();
@@ -188,9 +241,9 @@ public class MomoUpdatesPlugin extends Plugin {
 
     @PluginMethod
     public synchronized void finishRelay(PluginCall call) {
-        if (relayDigest == null) { call.reject("主设备下载尚未开始"); return; }
+        if (relayVersion == null) { call.reject("主设备下载尚未开始"); return; }
         try {
-            saveArchive(relayVersion, relaySize, relaySha, relayBytes, relayDigest);
+            saveArchive(relayVersion, relaySize, relaySha);
             call.resolve(state("ready", relayVersion));
         } catch (Exception error) {
             call.reject(error.getMessage(), error);
@@ -199,23 +252,34 @@ public class MomoUpdatesPlugin extends Plugin {
 
     @PluginMethod
     public synchronized void cancelRelay(PluginCall call) {
-        if (relayDigest != null) clearRelay();
+        if (relayVersion != null) clearRelay();
         call.resolve();
     }
 
     private void clearRelay() {
-        relayDigest = null;
-        partial().delete();
+        relayVersion = null;
         downloading.set(false);
     }
 
-    private void saveArchive(String version, long size, String sha256, long received, MessageDigest digest) throws Exception {
+    private void saveArchive(String version, long size, String sha256) throws Exception {
+        if (partial().length() != size) throw new IOException("安装包传输中断，已保留下载进度");
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = new FileInputStream(partial())) {
+            byte[] buffer = new byte[64 * 1024];
+            for (int count; (count = input.read(buffer)) != -1;) digest.update(buffer, 0, count);
+        }
         String actual = String.format(Locale.ROOT, "%064x", new BigInteger(1, digest.digest()));
-        if (received != size || !sha256.equals(actual)) throw new IOException("安装包校验失败，请重新检查更新");
-        verifyArchive(partial(), version);
+        if (!sha256.equals(actual)) {
+            discardPartial();
+            throw new IOException("安装包校验失败，请重新检查更新");
+        }
+        try { verifyArchive(partial(), version); }
+        catch (Exception invalid) { discardPartial(); throw invalid; }
+        if (!directory().isDirectory() && !directory().mkdirs()) throw new IOException("无法创建安装包目录");
         if (!partial().renameTo(archive(version))) throw new IOException("无法保存更新安装包");
         String previous = preferences().getString("version", "");
-        if (!preferences().edit().putString("version", version).putLong("size", size).remove("open").commit()) {
+        if (!preferences().edit().putString("version", version).putLong("size", size).remove("open")
+                .remove("partVersion").remove("partSize").remove("partSha").commit()) {
             throw new IOException("无法保存更新记录");
         }
         if (!version.equals(previous) && versionCode(previous) >= 0) archive(previous).delete();
@@ -270,6 +334,12 @@ public class MomoUpdatesPlugin extends Plugin {
         intent.setPackage(installer.activityInfo.packageName);
         activity.startActivity(intent);
         return state("installer-open", version);
+    }
+
+    @Override
+    protected synchronized void handleOnDestroy() {
+        if (relayVersion != null) clearRelay();
+        super.handleOnDestroy();
     }
 
     @Override

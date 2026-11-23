@@ -60,7 +60,7 @@ jobs:
       - name: Verify Ubuntu desktop pairing and sync
         if: matrix.name == 'Ubuntu-x64'
         run: |
-          node --test tests/host-updates.cjs tests/codex-access.cjs tests/migration.cjs tests/private-pages.cjs tests/private-media.cjs tests/media-transfer.cjs tests/ssh-connect.cjs tests/ssh-hints.cjs
+          node --test tests/host-updates.cjs tests/mobile-update-resume.cjs tests/codex-access.cjs tests/migration.cjs tests/private-pages.cjs tests/private-media.cjs tests/media-transfer.cjs tests/ssh-connect.cjs tests/ssh-hints.cjs
           npm ci --prefix relay
           node --test tests/ssh-session.cjs tests/ssh-offer.cjs tests/desktop-ssh-remote.cjs tests/sync-batches.cjs tests/late-ice.cjs
           npm install --prefix "$RUNNER_TEMP/momo-test" playwright@1.65.1

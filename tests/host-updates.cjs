@@ -3,7 +3,7 @@ const { createHash, randomBytes } = require('node:crypto')
 const { test } = require('node:test')
 const { createUpdateFeed } = require('../desktop/update-feed.cjs')
 const { desktopUpdateSource } = require('../desktop/update-source.cjs')
-const { updateBlockSize } = require('../shared/update-transfer.mjs')
+const { updateBlockSize, receiveUpdateBlocks, createUpdateSource } = require('../shared/update-transfer.mjs')
 const { createHostSync } = require('../shared/host-sync.mjs')
 const { releasePage, releasesApi } = require('../shared/installers.mjs')
 const { seal, unseal } = require('../shared/sync.mjs')
@@ -95,4 +95,36 @@ test('a failed upstream gives the paired device an actionable primary-device err
   }
   const source = desktopUpdateSource(() => '', { defaultSession: down, fromPartition: () => down })
   await assert.rejects(source('info', { channel: 'android' }), /请检查主设备网络或代理/)
+})
+
+test('resume yields earlier blocks even when a later prefetched request is interrupted', async () => {
+  const calls = [], committed = []
+  const asset = { version: '0.8.17', size: 5 * updateBlockSize }
+  const request = async (_, { offset }) => {
+    calls.push(offset)
+    if (offset === 3 * updateBlockSize) throw new Error('offline')
+    return String(offset)
+  }
+  await assert.rejects(async () => {
+    for await (const data of receiveUpdateBlocks(request, 'android', asset, updateBlockSize)) committed.push(data)
+  }, /offline/)
+  assert.deepEqual(committed, [String(updateBlockSize), String(2 * updateBlockSize)])
+  assert.deepEqual(calls, [1, 2, 3].map(index => index * updateBlockSize))
+})
+
+test('a restarted primary looks up the exact saved release before serving a resumed block', async () => {
+  const version = '0.8.16', name = 'Momo-Notes-' + version + '-Android.apk'
+  const url = releasePage + '/download/v' + version + '/' + name
+  const size = updateBlockSize + 3
+  const source = createUpdateSource(async (target, range) => {
+    if (!range) {
+      assert.equal(target, releasesApi + '/tags/v' + version)
+      return { status: 200, data: JSON.stringify({ tag_name: 'v' + version, draft: false, prerelease: false,
+        assets: [{ id: 1, state: 'uploaded', name, size, digest: 'sha256:' + 'a'.repeat(64), browser_download_url: url }] }) }
+    }
+    assert.equal(target, url)
+    assert.equal(range, 'bytes=' + updateBlockSize + '-' + (size - 1))
+    return { status: 206, range: 'bytes ' + updateBlockSize + '-' + (size - 1) + '/' + size, data: 'AQID' }
+  })
+  assert.equal(await source('block', { channel: 'android', version, offset: updateBlockSize }), 'AQID')
 })

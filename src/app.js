@@ -832,7 +832,7 @@ function drawUpdate(update) {
   const actionLabels = {
     available: '下载更新', downloading: '下载中', ready: api.mobile ? '打开安装包' : '安装并重启',
     'permission-required': '授予安装权限', 'installer-open': '打开安装包',
-    installing: '安装中', 'download-error': '重新下载', 'install-error': '重试安装',
+    installing: '安装中', 'download-error': '继续下载', 'install-error': '重试安装',
   }
   $('app-version').textContent = '当前版本 v' + update.version
   $('update-status').textContent = error || (viaHost && status !== 'unavailable'

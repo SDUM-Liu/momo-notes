@@ -2,9 +2,6 @@ const { session } = require('electron')
 const { validateProxyPort } = require('../shared/ai.mjs')
 const { createUpdateSource, updateBlockSize } = require('../shared/update-transfer.mjs')
 
-const retryableStatus = new Set([408, 502, 503, 504])
-const retryableNetworkError = /ERR_(?:CONNECTION_|PROXY_|TUNNEL_|NETWORK_|INTERNET_|NAME_NOT_RESOLVED|TIMED_OUT|EMPTY_RESPONSE)/
-
 function desktopUpdateSource(getProxyPort, sessions = session) {
   const retryAfter = new Map()
   let proxySession, configured, configuring = Promise.resolve(), direct
@@ -35,7 +32,7 @@ function desktopUpdateSource(getProxyPort, sessions = session) {
   async function read(network, url, range) {
     const response = await network.fetch(url, {
       headers: range ? { Range: range, 'Accept-Encoding': 'identity' } : { Accept: 'application/vnd.github+json, text/plain' },
-      signal: AbortSignal.timeout(range ? 12500 : 9000), credentials: 'omit',
+      signal: AbortSignal.timeout(range ? 12500 : 9000), credentials: 'omit', cache: 'no-store',
     })
     if (response.status !== (range ? 206 : 200) || !response.body) {
       await response.body?.cancel().catch(() => {})
@@ -47,6 +44,10 @@ function desktopUpdateSource(getProxyPort, sessions = session) {
       total += chunk.length
       if (total > (range ? updateBlockSize : 1024 * 1024)) throw new Error('主设备收到的更新数据超出限制')
       chunks.push(chunk)
+    }
+    if (range) {
+      const [, start, end] = /^bytes=(\d+)-(\d+)$/.exec(range)
+      if (total !== Number(end) - Number(start) + 1) return { status: 0 }
     }
     return { status: response.status, range: response.headers.get('content-range'),
       data: Buffer.concat(chunks).toString(range ? 'base64' : 'utf8') }
@@ -61,17 +62,15 @@ function desktopUpdateSource(getProxyPort, sessions = session) {
     const cooling = route => (retryAfter.get(key(route)) ?? 0) > Date.now()
     routes.sort((a, b) => Number(cooling(a)) - Number(cooling(b)))
     for (const route of routes) {
-      const network = await networkFor(route, port)
       try {
+        const network = await networkFor(route, port)
         const result = await read(network, url, range)
-        if (!retryableStatus.has(result.status)) {
+        if (range ? result.status === 206 && result.range?.startsWith(range.replace('=', ' ') + '/')
+          : result.status === 200) {
           retryAfter.delete(key(route))
           return result
         }
-      } catch (error) {
-        if (error.name !== 'TimeoutError' && error.name !== 'AbortError' &&
-            !retryableNetworkError.test(error.message)) throw error
-      }
+      } catch {}
       retryAfter.set(key(route), Date.now() + 60000)
     }
     throw new Error('主设备连接 GitHub 失败，请检查主设备网络或代理后重试。')

@@ -19,7 +19,7 @@ export function mobileUpdates(native, prepareInstaller, hostRequest = () => null
   let asset, initialization, generation = 0, listeningDirect = false
 
   function show(value) {
-    state = { ...value, version, viaHost: Boolean(hostRequest()) }
+    state = { ...value, version, viaHost: value.viaHost ?? state.viaHost ?? Boolean(hostRequest()) }
     onUpdate(state)
   }
 
@@ -28,6 +28,10 @@ export function mobileUpdates(native, prepareInstaller, hostRequest = () => null
     initialization ??= (async () => {
       const cached = await updater.pending()
       if (cached.target && state.status === 'idle') show(cached)
+      else if (cached.partial && state.status === 'idle') {
+        asset = verifyUpdate('android', cached.partial)
+        show({ status: 'download-error', target: asset.version, progress: cached.progress, error: '上次下载进度已保留，可以继续下载。' })
+      }
       await updater.addListener('updateState', value => {
         if (listeningDirect || value.status !== 'downloading') show(value)
       })
@@ -50,55 +54,74 @@ export function mobileUpdates(native, prepareInstaller, hostRequest = () => null
 
   async function downloadUpdate() {
     if (!asset) return checkUpdate()
-    const target = state.target
+    if (state.status === 'downloading') return
     const current = asset
+    const target = current.version
     const before = generation
     const relay = hostRequest()
-    show({ status: 'downloading', target })
+    show({ status: 'downloading', target, viaHost: Boolean(relay) })
     try {
       await init()
       if (generation !== before) return
       const metadata = { version: target, size: current.size, sha256: current.sha256 }
+      let complete = false
       if (relay) {
-        await updater.beginRelay(metadata)
+        let started = false
         try {
-          for await (const data of receiveUpdateBlocks(relay, 'android', current)) {
+          const cached = await updater.beginRelay(metadata)
+          started = true
+          if (cached?.status) show(cached)
+          for await (const data of receiveUpdateBlocks(relay, 'android', current, cached?.offset ?? 0)) {
             if (generation !== before) throw new Error('已切换更新来源')
             show(await updater.appendRelay({ data }))
           }
           await updater.finishRelay()
+          complete = true
         } catch (error) {
-          await updater.cancelRelay().catch(() => {})
-          throw error
+          if (started) await updater.cancelRelay().catch(() => {})
+          if (generation !== before) return
         }
-      } else {
+      }
+      if (!complete) {
+        show({ ...state, viaHost: false })
         listeningDirect = true
         try { await updater.download(metadata) } finally { listeningDirect = false }
       }
     } catch (error) {
-      if (generation === before) show({ status: 'download-error', target, error: error.message })
+      if (generation === before) {
+        const saved = await updater.pending().catch(() => null)
+        if (generation === before) show({ status: 'download-error', target, progress: saved?.progress,
+          error: saved?.partial ? '更新下载中断，进度已保留。恢复网络后可继续下载。'
+            : relay ? '主设备和手机直连暂时都无法下载安装包，请稍后重试。' : error.message })
+      }
       return
     }
     if (generation === before) await installUpdate()
   }
 
   async function checkUpdate() {
+    await init()
     if (!['idle', 'current', 'check-error', 'distribution-unavailable', 'download-error'].includes(state.status)) return
+    if (state.status === 'download-error' && asset) return downloadUpdate()
     const before = generation
     const relay = hostRequest()
-    show({ status: 'checking' })
+    show({ status: 'checking', viaHost: Boolean(relay) })
     let target
     try {
       if (relay) {
-        const item = verifyUpdate('android', await relay('info', { channel: 'android' }))
-        if (generation !== before) return
-        target = item.version
-        if (!newerThanInstalled(target)) { show({ status: 'current' }); return }
-        if (!android) { show({ status: 'distribution-unavailable', target }); return }
-        asset = item
-        show({ status: 'checking', target })
-        await downloadUpdate()
-        return
+        try {
+          const item = verifyUpdate('android', await relay('info', { channel: 'android' }))
+          if (generation !== before) return
+          target = item.version
+          if (!newerThanInstalled(target)) { show({ status: 'current' }); return }
+          if (!android) { show({ status: 'distribution-unavailable', target }); return }
+          asset = item
+          show({ status: 'checking', target })
+          await downloadUpdate()
+          return
+        } catch {
+          if (generation !== before) return
+        }
       }
       const response = await CapacitorHttp.get({
         url: releasesApi + '/latest', headers: { Accept: 'application/vnd.github+json' },
@@ -112,14 +135,16 @@ export function mobileUpdates(native, prepareInstaller, hostRequest = () => null
       target = match[1]
       if (!newerThanInstalled(target)) { show({ status: 'current' }); return }
       if (!android) { show({ status: 'distribution-unavailable', target }); return }
-      asset = releaseCatalog([release], release.tag_name, 'android').versions[0]?.assets
+      const item = releaseCatalog([release], release.tag_name, 'android').versions[0]?.assets
         .find(file => file.name === 'Momo-Notes-' + target + '-Android.apk')
-      if (!asset?.sha256 || asset.size > 256 * 1024 * 1024) {
+      if (!item?.sha256 || item.size > 256 * 1024 * 1024) {
         show({ status: 'check-error', error: '新版暂无可验证的安卓安装包' })
         return
       }
+      asset = { ...item, version: target }
     } catch (error) {
-      if (generation === before) show({ status: 'check-error', ...(relay && { error: error.message }) })
+      if (generation === before) show({ status: 'check-error', error: relay
+        ? '主设备和手机直连暂时都无法检查 GitHub 更新，请稍后重试。' : error.message })
       return
     }
     show({ status: 'checking', target })
@@ -127,12 +152,14 @@ export function mobileUpdates(native, prepareInstaller, hostRequest = () => null
   }
 
   return {
-    get state() { return { ...state, viaHost: Boolean(hostRequest()) } },
+    get state() { return { ...state, viaHost: state.viaHost ?? Boolean(hostRequest()) } },
     routeChanged() {
       ++generation
-      asset = undefined
       listeningDirect = false
-      show({ status: native ? 'idle' : 'unavailable' })
+      const target = asset?.version
+      const viaHost = Boolean(hostRequest())
+      show(target ? { status: 'download-error', target, viaHost, error: '更新来源已切换，可以继续下载。' }
+        : { status: native ? 'idle' : 'unavailable', viaHost })
     },
     onUpdate(callback) { onUpdate = callback; void init() },
     checkUpdate, downloadUpdate, installUpdate,
