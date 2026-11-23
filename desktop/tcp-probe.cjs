@@ -1,7 +1,7 @@
 const { spawn } = require('node:child_process')
 const { createInterface } = require('node:readline')
 const path = require('node:path')
-const { isPublicProbeEndpoint } = require('../shared/tcp-probe.mjs')
+const { isPublicProbeEndpoint, isUdpEndpoints } = require('../shared/tcp-probe.mjs')
 
 function executable() {
   const name = process.platform === 'win32' ? 'momo-tcp-probe.exe' : 'momo-tcp-probe'
@@ -25,7 +25,9 @@ function probeError(code) {
   return Object.assign(new Error(messages[code] || 'TCP 直连测试失败'), { code })
 }
 
-function createTcpProbe() {
+function createTcpProbe(transport = "tcp") {
+  const udp = transport === "udp"
+  const valid = udp ? isUdpEndpoints : isPublicProbeEndpoint
   let active
   function finish(session, result) {
     if (active !== session) return
@@ -43,7 +45,7 @@ function createTcpProbe() {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return Promise.reject(probeError('invalid_id'))
     if (active?.id === id) return active.ready.promise
     if (active) return Promise.reject(probeError('busy'))
-    const child = spawn(executable(), [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
+    const child = spawn(executable(), udp ? ['--udp'] : [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
     const session = { id, child, phase: 'preparing', ready: Promise.withResolvers(), done: Promise.withResolvers() }
     active = session
     const fail = reason => finish(session, { ok: false, reason })
@@ -57,9 +59,9 @@ function createTcpProbe() {
       if (active !== session) return
       let message
       try { message = JSON.parse(line) } catch { return fail('helper_unavailable') }
-      if (message?.event === 'mapped' && session.phase === 'preparing' && isPublicProbeEndpoint(message.endpoint)) {
+      if (message?.event === 'mapped' && session.phase === 'preparing' && valid(udp ? message.endpoints : message.endpoint)) {
         session.phase = 'prepared'
-        session.ready.resolve({ endpoint: message.endpoint })
+        session.ready.resolve({ endpoint: udp ? message.endpoints : message.endpoint })
         expire(session, 50000, 'expired')
       } else if (message?.event === 'result' && session.phase === 'running' && message.ok === true) {
         finish(session, { ok: true })
@@ -81,7 +83,7 @@ function createTcpProbe() {
       return session.done.promise
     }
     if (session.phase !== 'prepared') return { ok: false, reason: 'not_prepared' }
-    if (!isPublicProbeEndpoint(endpoint)) {
+    if (!valid(endpoint)) {
       finish(session, { ok: false, reason: 'invalid_peer' })
     } else if (typeof token !== 'string' || !/^[0-9a-f]{64}$/i.test(token)) {
       finish(session, { ok: false, reason: 'invalid_token' })
@@ -90,7 +92,7 @@ function createTcpProbe() {
       session.endpoint = endpoint
       session.token = token
       expire(session, 26000, 'expired')
-      session.child.stdin.end(JSON.stringify({ endpoint, token }) + '\n')
+      session.child.stdin.end(JSON.stringify(udp ? { endpoints: endpoint, token } : { endpoint, token }) + '\n')
     }
     return session.done.promise
   }

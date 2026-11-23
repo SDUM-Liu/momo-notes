@@ -325,6 +325,11 @@ export function createMobileBridge() {
     run: (id, endpoint, token) => syncTransport.tcpProbeRun({ id, endpoint, token }),
     cancel: id => syncTransport.tcpProbeCancel({ id }),
   } : undefined
+  const udpProbe = tcpProbe ? {
+    prepare: id => syncTransport.udpProbePrepare({ id }),
+    run: (id, endpoint, token) => syncTransport.udpProbeRun({ id, endpoints: endpoint, token }),
+    cancel: id => syncTransport.tcpProbeCancel({ id }),
+  } : undefined
   const sync = mobileSync({
     editing: () => document.activeElement?.isContentEditable === true,
     exchange: syncLink.exchange,
@@ -469,7 +474,7 @@ export function createMobileBridge() {
       const saved = await SecureStorage.getItem('sync-host').catch(() => null)
       if (saved) { try { hostConfig = JSON.parse(saved) } catch {} }
     }
-    host = createHostSync({ config: hostConfig, store: primaryStore, defaults: relayDefaults, update: hostUpdates, tcpProbe,
+    host = createHostSync({ config: hostConfig, store: primaryStore, defaults: relayDefaults, update: hostUpdates, tcpProbe, udpProbe,
       persist() {
         const value = JSON.stringify(hostConfig)
         hostSave = hostSave.catch(noop).then(() => SecureStorage.setItem('sync-host', value))
@@ -630,6 +635,7 @@ export function createMobileBridge() {
       }
     },
     testSync: sync.test,
+    testUdpProbe: async code => { await init; return sync.testTcpProbe(udpProbe, code, 'udp') },
     testTcpProbe: async code => { await init; return sync.testTcpProbe(tcpProbe, code) },
     async scanSyncCode() {
       if (floatingPet) {

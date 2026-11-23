@@ -1,8 +1,12 @@
 package io.github.sdumliu.momonotes;
 
 import java.io.Closeable;
+import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.SocketTimeoutException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -20,6 +24,8 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
@@ -29,6 +35,9 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -66,6 +75,8 @@ final class TcpProbe {
         final CompletableFuture<Result> prepare = new CompletableFuture<>();
         final CompletableFuture<Result> run = new CompletableFuture<>();
         InetSocketAddress local;
+        DatagramSocket datagram;
+        List<String> mappings;
         String mapped;
         boolean running, failedProof;
         int deadlineVersion;
@@ -130,13 +141,17 @@ final class TcpProbe {
     }
 
     synchronized CompletableFuture<Result> prepare(String id) {
+        return prepare(id, false);
+    }
+
+    synchronized CompletableFuture<Result> prepare(String id, boolean udp) {
         if (id == null || !id.matches("[0-9a-f]{32}")) return failure("invalid_id");
         if (!foreground || destroyed) return failure("cancelled");
         if (active != null) return failure("busy");
         Session session = new Session(id);
         active = session;
         deadline(session, 12, "observer_unavailable");
-        try { workers.execute(() -> observe(session)); }
+        try { workers.execute(() -> { if (udp) observeUdp(session); else observe(session); }); }
         catch (RejectedExecutionException busy) { finish(session, "busy"); }
         return session.prepare;
     }
@@ -206,6 +221,128 @@ final class TcpProbe {
         }
         if (mapped == null) throw new IOException("invalid_mapping");
         return mapped;
+    }
+
+    private void observeUdp(Session session) {
+        try {
+            DatagramSocket socket = track(session, new DatagramSocket(new InetSocketAddress("0.0.0.0", 0)));
+            List<String> mappings = new ArrayList<>();
+            String[] hosts = {"stun.cloudflare.com", "stun.l.google.com"};
+            int[] ports = {3478, 19302};
+            for (int i = 0; i < hosts.length && current(session); i++) {
+                try {
+                    String host = hosts[i];
+                    Future<InetAddress[]> query = workers.submit(() -> resolver.lookup(host));
+                    InetAddress[] addresses;
+                    try { addresses = query.get(3, TimeUnit.SECONDS); }
+                    finally { query.cancel(true); }
+                    for (InetAddress ip : addresses) {
+                        if (!isPublic(ip)) continue;
+                        String mapped = mapUdp(socket, new InetSocketAddress(ip, ports[i]));
+                        if (mapped != null && !mappings.contains(mapped)) mappings.add(mapped);
+                        break;
+                    }
+                } catch (IOException | ExecutionException | TimeoutException | RejectedExecutionException ignored) {}
+                catch (InterruptedException stopping) { Thread.currentThread().interrupt(); break; }
+            }
+            synchronized (this) {
+                if (active != session) return;
+                if (mappings.isEmpty()) { finish(session, "observer_unavailable"); return; }
+                session.datagram = socket;
+                session.mappings = mappings;
+                deadline(session, 50, "expired");
+                session.prepare.complete(new Result(String.join(",", mappings), null));
+            }
+        } catch (IOException | RuntimeException error) { finish(session, "observer_unavailable"); }
+    }
+
+    private static String mapUdp(DatagramSocket socket, InetSocketAddress observer) throws IOException {
+        byte[] transaction = new byte[12]; RANDOM.nextBytes(transaction);
+        byte[] request = ByteBuffer.allocate(20).putShort((short)1).putShort((short)0).putInt(COOKIE).put(transaction).array();
+        byte[] data = new byte[1024];
+        for (int attempt = 0; attempt < 3; attempt++) {
+            socket.send(new DatagramPacket(request, request.length, observer));
+            long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(550);
+            while (System.nanoTime() < until) {
+                socket.setSoTimeout((int)Math.max(1, TimeUnit.NANOSECONDS.toMillis(until - System.nanoTime())));
+                DatagramPacket reply = new DatagramPacket(data, data.length);
+                try { socket.receive(reply); } catch (SocketTimeoutException expired) { break; }
+                if (!observer.equals(reply.getSocketAddress()) || reply.getLength() < 20 ||
+                        (ByteBuffer.wrap(data).getShort(2) & 0xffff) != reply.getLength() - 20) continue;
+                try { return binding(new DataInputStream(new ByteArrayInputStream(data, 0, reply.getLength())), transaction); }
+                catch (IOException ignored) {}
+            }
+        }
+        return null;
+    }
+
+    synchronized CompletableFuture<Result> runUdp(String id, List<String> targets, String token) {
+        Session session = active;
+        if (session == null || !session.id.equals(id) || session.datagram == null) return failure("expired");
+        if (session.running) return failure("busy");
+        if (targets.isEmpty() || targets.size() > 2 || token == null || !token.matches("[0-9a-f]{64}")) return failure("invalid_peer");
+        List<InetSocketAddress> peers = new ArrayList<>();
+        try {
+            for (String target : targets) {
+                InetSocketAddress address = endpoint(target);
+                if (!session.mappings.contains(target) && !peers.contains(address)) peers.add(address);
+            }
+        } catch (IOException invalid) { return failure("invalid_peer"); }
+        if (peers.isEmpty()) return failure("invalid_peer");
+        byte[] key = new byte[32];
+        for (int i = 0; i < key.length; i++) key[i] = (byte)Integer.parseInt(token.substring(i*2,i*2+2),16);
+        session.running = true;
+        deadline(session, 21, "no_authenticated_peer");
+        try {
+            workers.execute(() -> {
+                try { finish(session, punchUdp(session.datagram, peers, key, 18) ? null : "no_authenticated_peer"); }
+                catch (IOException | GeneralSecurityException ignored) { finish(session, "no_authenticated_peer"); }
+                finally { Arrays.fill(key, (byte)0); }
+            });
+        } catch (RejectedExecutionException busy) { finish(session, "busy"); }
+        return session.run;
+    }
+
+    static boolean punchUdp(DatagramSocket socket, List<InetSocketAddress> targets, byte[] key, int seconds)
+            throws IOException, GeneralSecurityException {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(key,"HmacSHA256"));
+        byte[] nonce = new byte[16], outgoing = new byte[64], incoming = new byte[65];
+        RANDOM.nextBytes(nonce);
+        System.arraycopy(nonce, 0, outgoing, 0, 16);
+        InetSocketAddress learned = null;
+        long verified = 0, end = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+        while (System.nanoTime() < end) {
+            System.arraycopy(udpTag(mac,outgoing),0,outgoing,32,32);
+            for (InetSocketAddress peer : targets) sendProbe(socket, outgoing, peer);
+            if (learned != null && !targets.contains(learned)) sendProbe(socket, outgoing, learned);
+            long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(170);
+            while (System.nanoTime() < until) {
+                socket.setSoTimeout((int)Math.max(1,TimeUnit.NANOSECONDS.toMillis(until-System.nanoTime())));
+                DatagramPacket packet = new DatagramPacket(incoming,incoming.length);
+                try { socket.receive(packet); } catch (SocketTimeoutException expired) { break; }
+                if (packet.getLength()!=64 || packet.getPort()<1024 ||
+                        targets.stream().noneMatch(peer -> peer.getAddress().equals(packet.getAddress())) ||
+                        Arrays.equals(nonce,Arrays.copyOf(incoming,16)) ||
+                        !MessageDigest.isEqual(udpTag(mac,incoming),Arrays.copyOfRange(incoming,32,64))) continue;
+                learned = (InetSocketAddress)packet.getSocketAddress();
+                System.arraycopy(incoming,0,outgoing,16,16);
+                if (verified==0 && Arrays.equals(nonce,Arrays.copyOfRange(incoming,16,32))) verified=System.nanoTime();
+            }
+            if (verified!=0 && System.nanoTime()-verified >= TimeUnit.SECONDS.toNanos(1)) return true;
+        }
+        return false;
+    }
+
+    private static byte[] udpTag(Mac mac, byte[] packet) {
+        mac.update("momo-udp-diagnostic-v1/".getBytes(StandardCharsets.US_ASCII));
+        mac.update(packet,0,32);
+        return mac.doFinal();
+    }
+
+    private static void sendProbe(DatagramSocket socket, byte[] packet, InetSocketAddress target) throws IOException {
+        try { socket.send(new DatagramPacket(packet, packet.length, target)); }
+        catch (IOException unavailable) { if (socket.isClosed()) throw unavailable; }
     }
 
     private static boolean isPublic(InetAddress ip) {

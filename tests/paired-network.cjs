@@ -9,6 +9,31 @@ const origin = 'https://relay.example.com'
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const sampleDevice = () => ({ id: randomUUID(), sshProof: randomBytes(32).toString('hex'), platform: 'Android' })
 
+test('paired UDP uses its own native backend and exchanges both measured mappings', async t => {
+  const hostMappings = [hostEndpoint, '8.8.8.8:40005'], clientMappings = [clientEndpoint, '1.1.1.1:40006']
+  const { host } = await setup(t, {
+    udpProbe: {
+      prepare: () => ({ endpoint: hostMappings }),
+      run(_id, targets, token) {
+        assert.deepEqual(targets, clientMappings)
+        assert.match(token, /^[a-f0-9]{64}$/)
+        return { ok: true }
+      },
+      cancel() {},
+    },
+  })
+  const follower = await followerFor(t, host)
+  assert.deepEqual(await follower.testTcpProbe({
+    prepare: () => ({ endpoint: clientMappings }),
+    run(_id, endpoints) {
+      assert.deepEqual(endpoints, hostMappings)
+      return { ok: true }
+    },
+    cancel() {},
+  }, '', 'udp'), { status: 'direct' })
+  assert.equal(follower.state().via, 'relay')
+})
+
 async function setup(t, services) {
   const config = {}
   const host = createHostSync({

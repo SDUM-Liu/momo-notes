@@ -13,6 +13,8 @@ export function isPublicProbeEndpoint(value) {
   return !(a === 198 && (b === 18 || b === 19 || b === 51 && c === 100) || a === 203 && b === 0 && c === 113)
 }
 
+export const isUdpEndpoints = value => Array.isArray(value) && value.length >= 1 && value.length <= 2 && value.every(isPublicProbeEndpoint) && new Set(value).size === value.length
+
 const reasons = new Map([
   ['observer_unavailable', 'observer_unavailable'], ['invalid_mapping', 'observer_unavailable'],
   ['helper_unavailable', 'unavailable'], ['unsupported', 'unsupported'], ['UNIMPLEMENTED', 'unsupported'],
@@ -50,17 +52,18 @@ function bounded(promise, signal, ms) {
   })
 }
 
-export async function pairedTcpProbe(local, request, device, signal) {
+export async function pairedTcpProbe(local, request, device, signal, transport = "tcp") {
   if (!local?.prepare || !local.run || !local.cancel) return { status: 'unsupported' }
   const id = transferId()
-  const remote = (op, data = {}) => request('tcp-probe-' + op, { id, device, ...data })
+  const valid = transport === "udp" ? isUdpEndpoints : isPublicProbeEndpoint
+  const remote = (op, data = {}) => request(transport + '-probe-' + op, { id, device, ...data })
   const cleanup = fn => { void Promise.resolve().then(fn).catch(() => {}) }
   let preparing = false, finished = false
   async function endpoint(prepare, cancel) {
     const result = await prepare()
     if (finished || signal.aborted) { cleanup(cancel); fail('cancelled') }
     if (result?.ok === false) throw result
-    if (!isPublicProbeEndpoint(result?.endpoint)) fail('observer_unavailable')
+    if (!valid(result?.endpoint)) fail('observer_unavailable')
     return result.endpoint
   }
   async function run(start) {

@@ -33,6 +33,10 @@ import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 import org.json.JSONObject;
+import org.json.JSONArray;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 @CapacitorPlugin(name = "MomoSync")
 public class MomoSyncPlugin extends Plugin {
@@ -107,6 +111,24 @@ public class MomoSyncPlugin extends Plugin {
     @PluginMethod
     public void tcpProbeRun(PluginCall call) {
         probeReply(call, tcpProbe.run(call.getString("id"), call.getString("endpoint"), call.getString("token")));
+    }
+
+    @PluginMethod
+    public void udpProbePrepare(PluginCall call) {
+        tcpProbe.prepare(call.getString("id"), true).thenAccept(answer -> {
+            if (answer.endpoint == null) call.resolve(new JSObject().put("ok", false).put("reason", answer.reason));
+            else call.resolve(new JSObject().put("endpoint", new JSONArray(Arrays.asList(answer.endpoint.split(",")))));
+        });
+    }
+
+    @PluginMethod
+    public void udpProbeRun(PluginCall call) {
+        JSONArray values = call.getArray("endpoints");
+        List<String> targets = new ArrayList<>();
+        if (values != null && values.length() <= 2) {
+            for (int i = 0; i < values.length(); i++) targets.add(values.optString(i, ""));
+        }
+        probeReply(call, tcpProbe.runUdp(call.getString("id"), targets, call.getString("token")));
     }
 
     @PluginMethod

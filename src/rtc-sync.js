@@ -4,7 +4,10 @@ const chunkSize = 12 * 1024
 const idPattern = /^[a-f0-9-]{36}$/
 const transferPattern = /^[a-f0-9]{32}$/
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
-const iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }]
+const iceServers = [
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.l.google.com:19302' },
+]
 const offline = () => new Error('无法连接同步服务或主机未在线，请确认主机已开启异地同步')
 
 function socketLink(options, onFrame, onClose) {
@@ -104,6 +107,34 @@ async function gather(pc, type) {
 
 const signalContext = (type, peer) => 'rtc/' + type + '/' + peer
 
+// Older peers still get a complete offer or answer up to the original gathering deadline.
+async function signalLocal(pc, type, send) {
+  let described = false
+  let remaining = 64
+  pc.addEventListener('icecandidate', ({ candidate }) => {
+    if (described && candidate?.candidate && remaining > 0) {
+      --remaining
+      send(type + '-candidate', candidate.toJSON())
+    }
+  })
+  const description = await gather(pc, type)
+  send(type, description)
+  described = true
+}
+
+function readSignal(key, type, peer, packet) {
+  try { return { description: unseal(key, signalContext(type, peer), packet) } }
+  catch {
+    const candidate = unseal(key, signalContext(type + '-candidate', peer), packet)
+    if (typeof candidate?.candidate === 'string' && candidate.candidate.length <= 2048) return { candidate }
+    return {}
+  }
+}
+
+function acceptCandidate(pc, candidate) {
+  if (pc && candidate) void pc.addIceCandidate(candidate).catch(() => {})
+}
+
 export function hostSyncLink(config, exchange, onStatus) {
   let socket, generation = 0, retry
   let status
@@ -142,8 +173,9 @@ export function hostSyncLink(config, exchange, onStatus) {
       return
     }
     if (frame.kind !== 'signal' || !globalThis.RTCPeerConnection) return
-    const offer = unseal(config.key, signalContext('offer', id), frame.packet)
-    if (offer.type !== 'offer') return
+    const { description: offer, candidate } = readSignal(config.key, 'offer', id, frame.packet)
+    if (candidate) { acceptCandidate(peers.get(id)?.pc, candidate); return }
+    if (offer?.type !== 'offer') return
     const peer = peerFor(id, link)
     if (!peer) return
     peer.pc?.close()
@@ -155,8 +187,9 @@ export function hostSyncLink(config, exchange, onStatus) {
       channel.onmessage = event => receive(event.data)
     }
     await pc.setRemoteDescription(offer)
-    const answer = await gather(pc, 'answer')
-    if (socket === link && peer.pc === pc) link.send('signal', seal(config.key, signalContext('answer', id), answer), id)
+    await signalLocal(pc, 'answer', (type, payload) => {
+      if (socket === link && peer.pc === pc) link.send('signal', seal(config.key, signalContext(type, id), payload), id)
+    })
   }
   async function connect() {
     const attempt = ++generation
@@ -215,8 +248,9 @@ async function clientLink(connection, route, disconnected) {
     if (frame.kind === 'data') receiveRelay(frame.packet)
     if (frame.kind === 'signal' && pc && frame.peer === peer) {
       try {
-        const answer = unseal(connection.key, signalContext('answer', peer), frame.packet)
-        if (answer.type === 'answer') void pc.setRemoteDescription(answer).catch(() => {})
+        const { description: answer, candidate } = readSignal(connection.key, 'answer', peer, frame.packet)
+        if (answer?.type === 'answer') void pc.setRemoteDescription(answer).catch(() => {})
+        else acceptCandidate(pc, candidate)
       } catch {}
     }
   }, close)
@@ -227,8 +261,9 @@ async function clientLink(connection, route, disconnected) {
       channel = pc.createDataChannel('momo-sync')
       const receiveDirect = receiver('direct')
       channel.onmessage = event => receiveDirect(event.data)
-      const offer = await gather(pc, 'offer')
-      if (!stopped) link.send('signal', seal(connection.key, signalContext('offer', peer), offer))
+      await signalLocal(pc, 'offer', (type, payload) => {
+        if (!stopped) link.send('signal', seal(connection.key, signalContext(type, peer), payload))
+      })
     })().catch(() => {})
   }
   return {

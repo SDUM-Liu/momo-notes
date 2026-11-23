@@ -223,7 +223,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       if (!connection) throw new Error('请先输入主机配对码')
       return request(connection, 'test')
     },
-    async testTcpProbe(local, code) {
+    async testTcpProbe(local, code, transport) {
       const connection = pair
       if (!connection || switching) return { status: 'unpaired' }
       if (String(code ?? '').trim()) {
@@ -237,7 +237,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
       const current = new AbortController()
       tcpProbe = current
       try {
-        return await pairedTcpProbe(local, (op, data) => request(connection, op, data), device, current.signal)
+        return await pairedTcpProbe(local, (op, data) => request(connection, op, data), device, current.signal, transport)
       } finally {
         tcpProbe = undefined
       }

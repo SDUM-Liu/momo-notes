@@ -250,6 +250,7 @@ function showView(next) {
   if (view === 'sync' && next !== 'sync') {
     ++testRevision
     $('sync-test').disabled = false
+    $('sync-udp-test').disabled = false
     if ($('ssh-dialog').open) $('ssh-dialog').close()
     ++qrRequest
     $('sync-qr').hidden = true
@@ -971,6 +972,7 @@ function drawSync(value) {
   const mobile = value.role === 'mobile'
   const phoneHost = api.mobile && value.role === 'host'
   const follower = value.role === 'follower' && value.enabled
+  $('sync-udp-test').hidden = !api.testUdpProbe || !value.enabled || (!mobile && !follower)
   if (follower) followerView = true
   const follow = !mobile && followerView
   $('sync-role-choice').hidden = !api.supportsFollower
@@ -1094,6 +1096,7 @@ $('sync-test').onclick = async event => {
   const revision = ++testRevision
   const code = $('sync-pair-code').value
   button.disabled = true
+  $('sync-udp-test').disabled = true
   status.textContent = '正在验证主机连接…'
   try {
     const path = await api.testSync(code)
@@ -1121,7 +1124,42 @@ $('sync-test').onclick = async event => {
   } catch (error) {
     if (revision === testRevision) status.textContent = errorMessage(error)
   } finally {
-    if (revision === testRevision) button.disabled = false
+    if (revision === testRevision) {
+      button.disabled = false
+      $('sync-udp-test').disabled = false
+    }
+  }
+}
+$('sync-udp-test').onclick = async event => {
+  const button = event.currentTarget
+  const status = $('sync-test-status')
+  const messages = {
+    direct: 'UDP 直连测试成功，两端已直接双向验证数据。',
+    failed: '本次原生 UDP 直连未打通。',
+    observer_unavailable: '至少一端未获取到可用的 UDP 公网映射。',
+    unsupported: '请将两端更新到支持原生 UDP 测试的版本。',
+    unpaired: '请使用当前已配对的主设备测试。',
+    busy: '请等待当前直连测试结束。',
+    timeout: '本次 UDP 直连测试超时。',
+    cancelled: '本次 UDP 直连测试已取消。',
+  }
+  const revision = ++testRevision
+  button.disabled = true
+  $('sync-test').disabled = true
+  status.textContent = '两端正在尝试原生 UDP 直连，请保持桃桃在前台。'
+  try {
+    const current = await api.testSync('')
+    const result = await api.testUdpProbe('')
+    if (revision === testRevision) {
+      status.textContent = '当前同步使用' + syncPathLabel(current) + '。' + (messages[result?.status] || '两端未能完成协调，请检查主设备连接。')
+    }
+  } catch (error) {
+    if (revision === testRevision) status.textContent = errorMessage(error)
+  } finally {
+    if (revision === testRevision) {
+      button.disabled = false
+      $('sync-test').disabled = false
+    }
   }
 }
 $('sync-unpair').onclick = () => syncAction(async () => {

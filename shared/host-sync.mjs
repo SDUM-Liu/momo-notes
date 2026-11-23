@@ -1,7 +1,7 @@
 import { digest, seal, unseal, wireLimit, pairingCode, relayOrigin, maxPairingLength, transferId,
   noteBatchSize, notesRevision } from './sync.mjs'
 import { normalizeSSHShareHint } from './ssh-endpoint.mjs'
-import { isPublicProbeEndpoint } from './tcp-probe.mjs'
+import { isPublicProbeEndpoint, isUdpEndpoints } from './tcp-probe.mjs'
 import { noteIdentity, noteKey, localDay, validateCategory, hasContent } from './notes.mjs'
 
 const randomHex = () => transferId() + transferId()
@@ -10,7 +10,7 @@ const revisionOf = doc => digest(JSON.stringify(doc))
 const sshOwner = proof => typeof proof === 'string' && /^[a-f0-9]{64}$/.test(proof)
   ? digest('momo/ssh-hint/' + proof) : null
 
-export function createHostSync({ config = {}, store, ask, notify, codex, update, tcpProbe, remoteBook, defaults, relayOverride, persist }) {
+export function createHostSync({ config = {}, store, ask, notify, codex, update, tcpProbe, udpProbe, remoteBook, defaults, relayOverride, persist }) {
   const replay = new Map()
   const lastSeen = new Map()
   const sshOffers = new Map()
@@ -19,25 +19,29 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     if (!probe || probe !== pendingProbe) return
     pendingProbe = undefined
     clearTimeout(probe.timer)
-    void Promise.resolve().then(() => tcpProbe.cancel(probe.id)).catch(() => {})
+    void Promise.resolve().then(() => probe.backend.cancel(probe.id)).catch(() => {})
   }
-  async function testTcp(op, payload) {
-    if (!tcpProbe) return { ok: false, reason: 'unsupported' }
+  async function testProbe(op, payload) {
+    const udp = op.startsWith("udp-")
+    const backend = udp ? udpProbe : tcpProbe
+    const valid = udp ? isUdpEndpoints : isPublicProbeEndpoint
+    const action = op.slice(10)
+    if (!backend) return { ok: false, reason: 'unsupported' }
     const owner = sshOwner(payload?.device?.sshProof)
     const device = config.devices?.find(d => d.id === payload?.device?.id)
     const id = payload?.id
     if (!owner || device?.sshOwner !== owner || typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) {
       return { ok: false, reason: 'unavailable' }
     }
-    if (op === 'tcp-probe-prepare') {
+    if (action === 'prepare') {
       if (pendingProbe) return { ok: false, reason: 'busy' }
-      const probe = { id, device: device.id, phase: 'preparing' }
+      const probe = { id, device: device.id, backend, phase: 'preparing' }
       pendingProbe = probe
       probe.timer = setTimeout(() => cancelProbe(probe), 75000)
       try {
-        const result = await tcpProbe.prepare(id)
+        const result = await backend.prepare(id)
         if (probe !== pendingProbe) return { ok: false, reason: 'cancelled' }
-        if (!isPublicProbeEndpoint(result?.endpoint)) {
+        if (!valid(result?.endpoint)) {
           cancelProbe(probe)
           return { ok: false, reason: result?.reason || 'observer_unavailable' }
         }
@@ -49,15 +53,15 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       }
     }
     const probe = pendingProbe
-    if (!probe || probe.id !== id || probe.device !== device.id) return { ok: false, reason: 'expired' }
-    if (op === 'tcp-probe-cancel') { cancelProbe(probe); return { ok: true } }
-    if (op !== 'tcp-probe-run' || probe.phase !== 'ready' ||
-        !isPublicProbeEndpoint(payload.endpoint) || typeof payload.token !== 'string' || !/^[a-f0-9]{64}$/.test(payload.token)) {
+    if (!probe || probe.id !== id || probe.backend !== backend || probe.device !== device.id) return { ok: false, reason: 'expired' }
+    if (action === 'cancel') { cancelProbe(probe); return { ok: true } }
+    if (action !== 'run' || probe.phase !== 'ready' ||
+        !valid(payload.endpoint) || typeof payload.token !== 'string' || !/^[a-f0-9]{64}$/.test(payload.token)) {
       return { ok: false, reason: 'unavailable' }
     }
     probe.phase = 'running'
     try {
-      const result = await tcpProbe.run(id, payload.endpoint, payload.token)
+      const result = await backend.run(id, payload.endpoint, payload.token)
       if (pendingProbe !== probe) return { ok: false, reason: 'cancelled' }
       return result?.ok === true ? { ok: true } : { ok: false, reason: result?.reason || 'unavailable' }
     } catch { return { ok: false, reason: 'unavailable' } }
@@ -280,7 +284,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
         const device = config.devices?.find(d => d.id === payload?.device?.id)
         if (!owner || device?.sshOwner !== owner) throw new Error('无法验证本设备，请先完成一次同步')
         value = await remoteBook.call(device.id, request.op.slice(13), payload)
-      } else if (request.op?.startsWith?.('tcp-probe-')) value = await testTcp(request.op, request.payload)
+      } else if (/^(tcp|udp)-probe-(prepare|run|cancel)$/.test(request.op)) value = await testProbe(request.op, request.payload)
       else if (request.op?.startsWith?.('update/') && update) value = await update(request.op.slice(7), request.payload)
       else value = await enqueue(() => {
         if (!enabled() || config.key !== key) throw new Error('主设备已停止同步')

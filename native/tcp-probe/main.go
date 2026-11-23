@@ -340,12 +340,15 @@ func run() event {
 }
 
 func main() {
-	if len(os.Args) != 1 {
+	start := run
+	if len(os.Args) == 2 && os.Args[1] == "--udp" {
+		start = runUDP
+	} else if len(os.Args) != 1 {
 		emit(fail("coordination", "unexpected_arguments"))
 		return
 	}
 	done := make(chan event, 1)
-	go func() { done <- run() }()
+	go func() { done <- start() }()
 	select {
 	case result := <-done:
 		emit(result)

@@ -97,6 +97,10 @@ export function desktopFollower(api) {
     async sshHint(scope, value) { await initial; return sync.sshHint(scope, value) },
     onSync(callback) { receive = callback },
     testSync: async code => { await initial; return sync.test(code) },
+    testUdpProbe: async code => {
+      await initial
+      return sync.testTcpProbe({ prepare: api.udpProbePrepare, run: api.udpProbeRun, cancel: api.udpProbeCancel }, code, 'udp')
+    },
     testTcpProbe: async code => {
       await initial
       return sync.testTcpProbe({ prepare: api.tcpProbePrepare, run: api.tcpProbeRun, cancel: api.tcpProbeCancel }, code)

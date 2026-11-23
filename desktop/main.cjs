@@ -39,6 +39,8 @@ let mode = 'pet'
 let hoverTimer
 let quitting = false
 const tcpProbe = createTcpProbe()
+const udpProbe = createTcpProbe("udp")
+const closeProbes = () => { tcpProbe.close(); udpProbe.close() }
 let asking = false
 
 const currentArea = point => screen.getDisplayNearestPoint(point).workArea
@@ -365,10 +367,10 @@ function registerIPC() {
   handle('sync:link', sync.link)
   handle('sync:status', sync.status)
   handle('sync:exchange', sync.exchange)
-  for (const op of ['prepare', 'run', 'cancel']) {
-    handle('tcp-probe:' + op, async (...args) => {
+  for (const [transport, probe] of [['tcp', tcpProbe], ['udp', udpProbe]]) for (const op of ['prepare', 'run', 'cancel']) {
+    handle(transport + '-probe:' + op, async (...args) => {
       if (!follower.store || quitting || sync.state().enabled) return { ok: false, reason: 'unpaired' }
-      try { return await tcpProbe[op](...args) }
+      try { return await probe[op](...args) }
       catch (error) { return { ok: false, reason: error.code || 'unavailable' } }
     })
   }
@@ -584,8 +586,8 @@ function start() {
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('render-process-gone', stopSSH)
   win.webContents.on('did-start-loading', stopSSH)
-  win.webContents.on('render-process-gone', tcpProbe.close)
-  win.webContents.on('did-start-loading', tcpProbe.close)
+  win.webContents.on('render-process-gone', closeProbes)
+  win.webContents.on('did-start-loading', closeProbes)
   win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   updates = createUpdates(value => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('updates:changed', value)
@@ -607,7 +609,7 @@ function start() {
   }, change => {
     if (quitting || win.isDestroyed()) return
     if (change.profileChanged) {
-      tcpProbe.close()
+      closeProbes()
       stopSSH()
       lockBook()
       today = follower.store ? localDay() : store.today()
@@ -621,7 +623,7 @@ function start() {
   codex = createCodex(profileDirectory, { get data() { return notesStore().data } }, approveCodex, launchHostCodex)
   sync = createSync(profileDirectory, store, ask, change => {
     if (!quitting && !win.isDestroyed()) win.webContents.send('notes:changed', change)
-  }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort), tcpProbe, remoteBook)
+  }, (op, payload) => codexAction(op, payload, true), desktopUpdateSource(() => store.data.settings.proxyPort), tcpProbe, remoteBook, udpProbe)
   localSSH = createLocalSSHPipes({ isPaired: () => Boolean(!quitting && follower.store && !sync.state().enabled) })
   remoteSSH = createRemoteSSHHost({ takeOffer: id => sync.takeSSHOffer(id), join: joinSSHRelay, launch: openRemoteTerminal })
   transfer = require('./handoff.cjs').handoff({ root: app.getPath('userData'), directory: profileDirectory,
@@ -667,7 +669,7 @@ if (app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true
     remoteBook?.forceLock()
-    tcpProbe.close()
+    closeProbes()
     stopSSH()
     clearInterval(dayTimer)
     updates?.stop()
