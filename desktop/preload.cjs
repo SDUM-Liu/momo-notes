@@ -70,6 +70,8 @@ contextBridge.exposeInMainWorld('momo', {
   followerCategories: invoke('follower:categories'),
   followerAccept: invoke('follower:accept'),
   followerReconcile: invoke('follower:reconcile'),
+  followerDraft: invoke('follower:draft'),
+  followerDrafts: invoke('follower:drafts'),
   openProject: invoke('project:open'),
   codex: invoke('codex:action'),
   codexSettings: invoke('codex:settings'),

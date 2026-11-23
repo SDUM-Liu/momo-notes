@@ -57,7 +57,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --test tests/desktop-tcp-probe.cjs
-      - name: Verify Ubuntu desktop pairing and read-only sync
+      - name: Verify Ubuntu desktop pairing and sync
         if: matrix.name == 'Ubuntu-x64'
         run: |
           node --test tests/host-updates.cjs tests/codex-access.cjs tests/migration.cjs tests/private-pages.cjs tests/private-media.cjs tests/media-transfer.cjs tests/ssh-connect.cjs tests/ssh-hints.cjs

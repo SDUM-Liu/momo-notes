@@ -1,18 +1,23 @@
 import { mobileSync } from './sync-client.js'
 import { mobileSyncLink } from './rtc-sync.js'
+import { defaultCategory, newCategory, noteKey } from '../shared/notes.mjs'
 
 export function desktopFollower(api) {
   const records = Object.create(null)
-  let receive = () => {}, profile
+  let receive = () => {}, receiveNotes = () => {}, profile, lastLock
+  const lockState = value => profile ? { ...value, locked: sync.state().locked } : value
   const link = mobileSyncLink(connection => sync.disconnected(connection))
   const sync = mobileSync({
-    readOnly: true,
+    follower: true,
+    categories: () => [],
+    editing: () => document.activeElement?.isContentEditable === true,
     exchange: link.exchange,
     loadCode: api.followerCode,
     saveCode: api.setFollower,
     records,
     async activate(connection) {
       profile = connection ? await api.followerSnapshot() : undefined
+      lastLock = undefined
       for (const key of Object.keys(records)) delete records[key]
       for (const [key, rev] of Object.entries(profile?.revisions ?? {})) records[key] = { rev }
     },
@@ -25,8 +30,13 @@ export function desktopFollower(api) {
       await api.followerReconcile(profile.id, revisions)
       for (const key of Object.keys(records)) if (!Object.hasOwn(revisions, key)) delete records[key]
     },
+    keepDraft: (key, doc) => api.followerDraft(profile.id, key, doc),
     change(value) {
       if (value.enabled || value.syncing) receive(value)
+      if (value.enabled && lastLock !== value.locked) {
+        lastLock = value.locked
+        receiveNotes({ locked: value.locked })
+      }
     },
   })
   const initial = sync.init()
@@ -36,7 +46,7 @@ export function desktopFollower(api) {
     catch (error) { reply = { ok: false, error: error.message } }
     await api.updateTransferReply(id, reply)
   })
-  const refresh = () => initial.then(sync.run).catch(() => {})
+  const refresh = () => initial.then(() => sync.run(true)).catch(() => {})
   void refresh()
   setInterval(refresh, 20000)
   setInterval(() => { void initial.then(sync.probe).catch(() => {}) }, 2500)
@@ -44,6 +54,39 @@ export function desktopFollower(api) {
   return {
     ...api,
     supportsFollower: true,
+    async getState() { await initial; return lockState(await api.getState()) },
+    onState(callback) { api.onState(value => callback(lockState(value))) },
+    onNotes(callback) { receiveNotes = callback; api.onNotes(callback) },
+    editorIdle: refresh,
+    async saveNote(date, doc, category = defaultCategory, base) {
+      await initial
+      const current = profile
+      if (!current) return api.saveNote(date, doc, category, base)
+      const key = noteKey(category, date)
+      try {
+        const result = await sync.edit({ key, doc, base: base === undefined ? records[key]?.rev ?? null : base })
+        if (profile !== current) throw new Error('主设备已切换，请重新同步')
+        await api.followerAccept(current.id, key, result)
+        records[key] = { rev: result.rev }
+        return result
+      } catch (error) {
+        if (error.code === 'NOTE_STALE' && current === profile) await sync.run().catch(() => {})
+        else await api.followerDraft(current.id, key, doc).catch(() => {})
+        throw error
+      }
+    },
+    async addCategory(name) {
+      await initial
+      const current = profile
+      if (!current) return api.addCategory(name)
+      const categories = await sync.addCategory(newCategory(name))
+      await api.followerCategories(current.id, categories)
+      return categories
+    },
+    async syncDrafts() {
+      await initial
+      return profile ? api.followerDrafts(profile.id) : {}
+    },
     async syncState() {
       await initial
       const follower = sync.state()

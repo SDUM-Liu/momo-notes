@@ -960,7 +960,7 @@ function drawSync(value) {
   $('sync-role-follower').disabled = value.role === 'host' && value.enabled
   $('sync-host').hidden = mobile || follow
   $('sync-mobile').hidden = !mobile && !follow
-  $('sync-drafts').hidden = !mobile
+  $('sync-drafts').hidden = !mobile && !follower
   $('sync-photo-label').textContent = api.mobile ? '从相册识别' : '从二维码图片识别'
   $('api-settings').hidden = phoneHost || (mobile && value.enabled)
   $('api-heading').hidden = phoneHost
@@ -977,14 +977,14 @@ function drawSync(value) {
       : '从主设备获取配对码或二维码。')
     return
   }
-  $('note-locked').textContent = follower ? '从设备 · 请在主设备编辑便签' : '正在同步，便签暂时只读。'
+  $('note-locked').textContent = follower && value.error ? '主机未连接，暂时无法编辑便签。' : '正在同步，便签暂时只读。'
   if (follow) {
     $('sync-pair').hidden = follower
     $('sync-now').hidden = $('sync-unpair').hidden = !follower
     $('sync-status').textContent = value.error || (follower
-      ? value.syncing ? '正在接收主设备便签…' : ['从设备 · 只读', syncPathLabel(value.via),
+      ? value.locked ? '正在同步主设备便签…' : ['从设备 · 可编辑', syncPathLabel(value.via),
           value.last ? new Date(value.last).toLocaleTimeString() : ''].filter(Boolean).join(' · ')
-      : '配对主设备，只读同步它的便签。本机便签和设置单独保留。')
+      : '配对主设备后即可同步并编辑便签。本机便签和设置单独保留。')
     return
   }
   $('sync-enable').textContent = value.enabled ? '停止主机同步' : '开启主机同步'
@@ -1105,6 +1105,7 @@ $('sync-test').onclick = async event => {
   }
 }
 $('sync-unpair').onclick = () => syncAction(async () => {
+  if (api.supportsFollower && !api.mobile) await saveQueue
   const result = await api.unpairSync()
   if (api.supportsFollower) followerView = false
   return result

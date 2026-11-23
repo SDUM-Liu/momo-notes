@@ -2,13 +2,13 @@ import { parsePairing, seal, unseal, wireLimit, transferId, noteBatchSize, notes
 import { pairedTcpProbe } from '../shared/tcp-probe.mjs'
 
 export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change,
-  readOnly = false, reconcile = () => {}, editing = () => false }) {
+  readOnly = false, follower = readOnly, reconcile = () => {}, editing = () => false }) {
   let pair, running, probing, switching, verified = false, peerLocked = true, last = '', error = ''
   let via, tcpProbe, syncedRevision
   let transferring = false
   let deferred = false
-  const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), sshHintScope: pair?.room, via, last, error,
-    ...(readOnly && { syncing: Boolean(running || switching || (pair && !verified && !error)) }),
+  const state = () => ({ role: follower ? 'follower' : 'mobile', enabled: Boolean(pair), sshHintScope: pair?.room, via, last, error,
+    ...(follower && { syncing: Boolean(running || switching || (pair && !verified && !error)) }),
     locked: readOnly || !pair || !verified || Boolean(transferring || switching || peerLocked) })
   async function request(connection, op, payload, token) {
     const bytes = crypto.getRandomValues(new Uint8Array(12))
@@ -89,7 +89,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         const outdated = Object.entries(snapshot.revisions).some(([key, rev]) => records[key]?.rev !== rev)
         if (!extra.length && !dirty && !outdated) {
           await setCategories(snapshot.categories)
-          if (readOnly) await reconcile(snapshot.revisions)
+          if (follower) await reconcile(snapshot.revisions)
           syncedRevision = notesRevision(snapshot.categories, snapshot.revisions)
           verified = true
           last = new Date().toISOString()
@@ -135,7 +135,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         }
         await request(connection, 'finish', undefined, token)
         token = undefined
-        if (readOnly) await reconcile(remote)
+        if (follower) await reconcile(remote)
         syncedRevision = notesRevision(response.categories, remote)
         verified = true
         last = new Date().toISOString()

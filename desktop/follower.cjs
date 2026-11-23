@@ -72,6 +72,29 @@ function createFollower(directory, credentials, notify) {
         notify({ key, removed: true })
       }
     },
+    draft(id, key, doc) {
+      const { cache } = current(id)
+      noteIdentity(key)
+      if (doc?.type !== 'doc' || !Array.isArray(doc.content)) throw new Error('便签草稿格式有误')
+      const folder = path.join(cache, 'drafts')
+      fs.mkdirSync(folder, { recursive: true, mode: 0o700 })
+      const target = path.join(folder, key + '.json')
+      fs.writeFileSync(target + '.tmp', JSON.stringify(doc), { mode: 0o600 })
+      fs.renameSync(target + '.tmp', target)
+    },
+    drafts(id) {
+      const folder = path.join(current(id).cache, 'drafts')
+      const drafts = Object.create(null)
+      if (!fs.existsSync(folder)) return drafts
+      for (const file of fs.readdirSync(folder).filter(name => name.endsWith('.json'))) {
+        const key = file.slice(0, -5)
+        try {
+          noteIdentity(key)
+          drafts[key] = JSON.parse(fs.readFileSync(path.join(folder, file), 'utf8'))
+        } catch {}
+      }
+      return drafts
+    },
   }
 }
 

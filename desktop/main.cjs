@@ -14,7 +14,7 @@ const { joinSSHRelay } = require('../shared/ssh-session.mjs')
 const { opensAtLogin, setOpenAtLogin } = require('./login.cjs')
 const { validateProxyPort } = require('../shared/ai.mjs')
 const { codexSetupUrl } = require('../shared/links.mjs')
-const { defaultCategory, noteKey, newCategory, datesFor, newDayNote, emptyNote, localDay } = require('../shared/notes.mjs')
+const { defaultCategory, noteKey, newCategory, datesFor, newDayNote, localDay } = require('../shared/notes.mjs')
 const { parsePairing } = require('../shared/sync.mjs')
 const { createSync } = require('./sync.cjs')
 const { createTcpProbe } = require('./tcp-probe.cjs')
@@ -371,6 +371,8 @@ function registerIPC() {
   handle('follower:categories', follower.categories)
   handle('follower:accept', follower.accept)
   handle('follower:reconcile', follower.reconcile)
+  handle('follower:draft', follower.draft)
+  handle('follower:drafts', follower.drafts)
   handle('codex:action', (op, data) => codexAction(op, data))
   handle('codex:settings', codex.settings)
   handle('codex:configure', values => codex.configure(Object.fromEntries(
@@ -445,7 +447,7 @@ function registerIPC() {
     return store.dates(category)
   })
   handle('notes:category', name => {
-    if (follower.store) throw new Error('从设备只读，请在主设备新建分类')
+    if (follower.store) throw new Error('请通过同步连接主设备后新建分类')
     sync.requireWritable()
     return store.addCategory(newCategory(name))
   })
@@ -454,12 +456,13 @@ function registerIPC() {
     const day = date || (notesLocked() ? today : store.today(category))
     const key = noteKey(category, day)
     const data = notesStore().data
-    const doc = data.notes[key] || (!date && notesLocked() ? (follower.store ? emptyNote() : newDayNote(data.notes, category, day)) : null)
+    const doc = data.notes[key] || (notesLocked() && (!date || (follower.store && day === today))
+      ? newDayNote(data.notes, category, day) : null)
     if (!doc) throw new Error('日期页不存在')
     return { date: day, category, doc, today, rev: data.revisions[key] }
   })
   handle('notes:save', (date, doc, category = defaultCategory, base) => {
-    if (follower.store) throw new Error('从设备只读，请在主设备编辑便签')
+    if (follower.store) throw new Error('请通过同步连接主设备后编辑便签')
     sync.requireWritable()
     const key = noteKey(category, date)
     return base === undefined

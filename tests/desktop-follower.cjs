@@ -15,6 +15,7 @@ const custom = { id: 'cat-' + 'd'.repeat(32), name: '测试分类' }
 const doc = text => ({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] })
 const localText = 'Local follower notes are kept separately'
 const hostText = 'First note from the main computer'
+const followerText = 'Edited on the paired computer'
 const refreshedText = 'Updated note from the main computer'
 const hostLabel = '主机已在线，可以扫码配对。'
 
@@ -88,7 +89,7 @@ async function main() {
     await client.page.locator('#sync-test').click()
     await waitText(client.page, '#sync-test-status', '配对码可用')
     await client.page.locator('#sync-pair').click()
-    await waitText(client.page, '#sync-status', '从设备 · 只读')
+    await waitText(client.page, '#sync-status', '从设备 · 可编辑')
     await client.page.locator('#sync-back').click()
     await client.page.locator('#settings-view .back').click()
     await waitText(client.page, '.tiptap', hostText)
@@ -97,14 +98,29 @@ async function main() {
       const page = await window.momo.openNote(date, id)
       return page.doc.content[0].content[0].text
     }, { date: historyDay, id: custom.id }), 'Earlier content in a shared category')
-    assert.equal(await client.page.locator('.tiptap').getAttribute('contenteditable'), 'false')
-    assert.match(await client.page.evaluate(async day => {
-      try { await window.momo.saveNote(day, { type: 'doc', content: [] }, 'todo') } catch (error) { return error.message }
-    }, day), /从设备只读/)
+    const editor = client.page.locator('.tiptap[contenteditable="true"]')
+    await editor.fill(followerText)
+    await waitText(client.page, '#status', '已保存')
+    assert.match(JSON.stringify(await host.page.evaluate(day => window.momo.openNote(day), day)), new RegExp(followerText))
+    await client.page.locator('#new-category').click()
+    await client.page.locator('#category-name').fill('从设备分类')
+    await client.page.locator('#category-form button[type=submit], #category-form button:not([type])').first().click()
+    await waitText(client.page, '#categories', '从设备分类')
+    await waitText(host.page, '#categories', '从设备分类')
+    await client.page.getByRole('tab', { name: '待办', exact: true }).click()
+    await waitText(client.page, '.tiptap', followerText)
     assert.match(await client.page.evaluate(async () => {
       try { await window.momo.enableSync(true) } catch (error) { return error.message }
     }), /请先取消从设备配对/)
+    // While this editor has focus, the background refresh defers fetching newer content.
+    await editor.focus()
     await host.page.evaluate(({ day, doc }) => window.momo.saveNote(day, doc), { day, doc: doc(refreshedText) })
+    await editor.fill('Conflicting local draft')
+    await waitText(client.page, '#status', '主机已有更新')
+    assert.match(JSON.stringify(await host.page.evaluate(day => window.momo.openNote(day), day)), new RegExp(refreshedText))
+    await client.page.locator('#reload-shared-note').click()
+    await waitText(client.page, '.tiptap', refreshedText)
+    assert.match(await client.page.locator('#saved-editor-draft').inputValue(), /Conflicting local draft/)
     await openSync(client.page)
     await client.page.locator('#sync-now').click()
     await waitText(client.page, '.tiptap', refreshedText)
@@ -126,7 +142,7 @@ async function main() {
     await client.page.locator('#sync-enable').click()
     await waitText(client.page, '#sync-status', hostLabel)
     assert.match(await checkDisplay(), /电脑检查时间/)
-    console.log('PASS desktop host, encrypted read-only follower, refresh, restart and restoration of local notes')
+    console.log('PASS desktop follower writes notes and categories to the primary, refreshes, and restores its local notes on unpair')
   } finally {
     if (client) await client.app.close().catch(() => {})
     if (host) await host.app.close().catch(() => {})
