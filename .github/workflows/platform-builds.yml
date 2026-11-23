@@ -62,7 +62,7 @@ jobs:
         run: |
           node --test tests/host-updates.cjs tests/codex-access.cjs tests/migration.cjs tests/private-pages.cjs tests/private-media.cjs tests/media-transfer.cjs tests/ssh-connect.cjs tests/ssh-hints.cjs
           npm ci --prefix relay
-          node --test tests/ssh-session.cjs tests/ssh-offer.cjs tests/desktop-ssh-remote.cjs
+          node --test tests/ssh-session.cjs tests/ssh-offer.cjs tests/desktop-ssh-remote.cjs tests/sync-batches.cjs
           npm install --prefix "$RUNNER_TEMP/momo-test" playwright@1.65.1
           npm run build
           MOMO_BROWSER_CHANNEL=chrome MOMO_PLAYWRIGHT="$RUNNER_TEMP/momo-test/node_modules/playwright" node --test tests/paired-network.cjs tests/tcp-probe-flow.cjs tests/remote-book.cjs tests/remote-book-client.cjs

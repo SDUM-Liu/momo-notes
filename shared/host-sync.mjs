@@ -1,4 +1,5 @@
-import { digest, seal, unseal, wireLimit, pairingCode, relayOrigin, maxPairingLength, transferId } from './sync.mjs'
+import { digest, seal, unseal, wireLimit, pairingCode, relayOrigin, maxPairingLength, transferId,
+  noteBatchSize, notesRevision } from './sync.mjs'
 import { normalizeSSHShareHint } from './ssh-endpoint.mjs'
 import { isPublicProbeEndpoint } from './tcp-probe.mjs'
 import { noteIdentity, noteKey, localDay, validateCategory, hasContent } from './notes.mjs'
@@ -180,6 +181,9 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       return device.sshHint || null
     }
     if (op === 'state' || op === 'index') recordDevice(payload)
+    if (op === 'state' && payload?.watchNotes) {
+      return { locked: Boolean(lease), revision: notesRevision(store.data.categories, store.data.revisions) }
+    }
     if (op === 'state' || op === 'test') return { locked: Boolean(lease) }
     if (op === 'index') return { categories: store.data.categories, revisions: store.data.revisions, locked: Boolean(lease) }
     if (op === 'edit' || op === 'category') {
@@ -201,7 +205,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
       try {
         for (const item of categories) await store.addCategory(item)
         if (previous !== store.data.categories) notify({ categories: store.data.categories })
-        return { token: lease, categories: store.data.categories, revisions: store.data.revisions }
+        return { token: lease, categories: store.data.categories, revisions: store.data.revisions, noteBatches: true }
       } catch (error) {
         unlock()
         throw error
@@ -222,6 +226,27 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     if (op === 'get') {
       noteIdentity(payload)
       return { key: payload, doc: store.data.notes[payload] ?? null, rev: store.data.revisions[payload] ?? null }
+    }
+    if (op === 'get-pages') {
+      if (!Array.isArray(payload) || !payload.length || payload.length > noteBatchSize) throw new Error('便签批次数量无效')
+      const pages = []
+      let size = 0
+      for (const key of payload) {
+        noteIdentity(key)
+        const doc = store.data.notes[key] ?? null
+        const page = { key, doc, rev: store.data.revisions[key] ?? null }
+        // Leave the existing single-page path available for pages with large embedded images.
+        const pageSize = JSON.stringify(page).length
+        if (pageSize > 512 * 1024) {
+          if (pages.length) break
+          pages.push({ key, separate: true })
+          break
+        }
+        size += pageSize
+        if (pages.length && size > 512 * 1024) break
+        pages.push(page)
+      }
+      return pages
     }
     if (op === 'put') return put(payload)
     throw new Error('未知的同步请求')

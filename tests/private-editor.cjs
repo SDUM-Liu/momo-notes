@@ -66,9 +66,12 @@ async function test() {
     async function unlock(offset = 0) {
       await page.locator('#settings').click()
       await page.locator('#project-issues').dragTo(page.locator('#project-repo'))
-      await page.locator('#book-password').fill(password)
+      await page.locator('#book-code:enabled').waitFor()
+      if (offset && fs.existsSync(path.join(profile, 'private-book-password.os'))) {
+        assert(await page.locator('#book-password').isHidden())
+      } else await page.locator('#book-password').fill(password)
       await page.locator('#book-code').fill(token(secret, Math.floor(Date.now() / 30000) + offset))
-      await page.locator('#book-auth button').click()
+      await page.locator('#book-auth button[type="submit"]').click()
       await editor.getByText('旧的已完成文字', { exact: true }).waitFor()
     }
     await unlock()

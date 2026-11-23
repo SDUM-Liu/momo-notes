@@ -212,6 +212,12 @@
         <section id="remote-ssh" class="ssh-devices" hidden aria-labelledby="remote-ssh-title">
           <h2 id="remote-ssh-title">通过互联网连接本设备</h2>
           <p>从设备和电脑可以使用不同的网络。先在本设备启动 SSH 服务，再允许电脑连接一次。</p>
+          <div id="termux-setup" hidden>
+            <p id="termux-setup-status" role="status"></p>
+            <button id="termux-setup-install" type="button" class="quiet" hidden>安装官方 Termux</button>
+            <button id="termux-setup-open" type="button" class="quiet" hidden>复制配置命令并打开 Termux</button>
+            <button id="termux-setup-check" type="button" class="quiet">检测 Termux</button>
+          </div>
           <form id="remote-ssh-form">
             <div class="ssh-pair">
               <label class="ssh-field">SSH 用户名<input id="remote-ssh-user" maxlength="128" required autocomplete="off" autocapitalize="none" spellcheck="false"></label>
@@ -426,11 +432,12 @@
     <h3>私密便签</h3>
     <form id="book-auth" class="fields">
       <img id="book-qr" width="168" height="168" alt="用身份验证器扫码绑定" hidden>
-      <label>独立口令（至少 12 个字符）<input id="book-password" type="password" autocomplete="off" required minlength="12"></label>
+      <label id="book-password-field">独立口令（至少 12 个字符）<input id="book-password" type="password" autocomplete="off" required minlength="12" maxlength="512"></label>
       <p id="book-account" hidden></p>
       <small id="book-clock"></small>
       <label>身份验证器验证码<input id="book-code" inputmode="numeric" autocomplete="off" required pattern="[0-9]{6}"></label>
-      <button class="primary">解锁</button>
+      <button type="submit" class="primary">解锁</button>
+      <button id="book-use-password" type="button" class="quiet" hidden>改用口令</button>
     </form>
     <p id="book-status" role="status"></p><button id="book-close" class="quiet">取消</button>
   </dialog>

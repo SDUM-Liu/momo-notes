@@ -1,10 +1,10 @@
-import { parsePairing, seal, unseal, wireLimit, transferId } from '../shared/sync.mjs'
+import { parsePairing, seal, unseal, wireLimit, transferId, noteBatchSize, notesRevision } from '../shared/sync.mjs'
 import { pairedTcpProbe } from '../shared/tcp-probe.mjs'
 
 export function mobileSync({ exchange, loadCode, saveCode, records, categories, setCategories, accept, activate, keepDraft, change,
   readOnly = false, reconcile = () => {}, editing = () => false }) {
   let pair, running, probing, switching, verified = false, peerLocked = true, last = '', error = ''
-  let via, tcpProbe
+  let via, tcpProbe, syncedRevision
   let transferring = false
   let deferred = false
   const state = () => ({ role: readOnly ? 'follower' : 'mobile', enabled: Boolean(pair), sshHintScope: pair?.room, via, last, error,
@@ -49,10 +49,10 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
     probing = (async () => {
       let recover = false
       try {
-        const result = await request(connection, 'state', identity(connection))
+        const result = await request(connection, 'state', { ...identity(connection), watchNotes: true })
         if (connection !== pair || running) return
         peerLocked = result.locked
-        recover = !peerLocked && !verified
+        recover = !peerLocked && (!verified || (!editing() && result.revision && result.revision !== syncedRevision))
       } catch (failure) {
         if (connection !== pair || running) return
         peerLocked = true
@@ -62,7 +62,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         probing = null
         change(state())
       }
-      if (recover) void run().catch(() => {})
+      if (recover) void run(verified).catch(() => {})
     })()
     return probing
   }
@@ -90,6 +90,7 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         if (!extra.length && !dirty && !outdated) {
           await setCategories(snapshot.categories)
           if (readOnly) await reconcile(snapshot.revisions)
+          syncedRevision = notesRevision(snapshot.categories, snapshot.revisions)
           verified = true
           last = new Date().toISOString()
           error = ''
@@ -115,15 +116,27 @@ export function mobileSync({ exchange, loadCode, saveCode, records, categories, 
         }
         const remote = readOnly ? response.revisions : await request(connection, 'materialize', undefined, token)
         // Pull recent pages first so today's view refreshes quickly.
-        for (const [key, rev] of Object.entries(remote).sort(([a], [b]) => b.slice(-10).localeCompare(a.slice(-10)))) {
-          const current = records[key]
-          if (current?.dirty || current?.rev === rev) continue
-          const updated = await request(connection, 'get', key, token)
-          if (updated.doc) await accept(key, current, updated, false)
+        const missing = Object.keys(remote).filter(key => !records[key]?.dirty && records[key]?.rev !== remote[key])
+          .sort((a, b) => b.slice(-10).localeCompare(a.slice(-10)))
+        for (let offset = 0; offset < missing.length;) {
+          const keys = missing.slice(offset, offset + (response.noteBatches ? noteBatchSize : 1))
+          const previous = keys.map(key => records[key])
+          const pages = response.noteBatches
+            ? await request(connection, 'get-pages', keys, token)
+            : [await request(connection, 'get', keys[0], token)]
+          if (!Array.isArray(pages) || !pages.length || pages.length > keys.length) throw new Error('主机返回的便签批次无效')
+          for (const [i, page] of pages.entries()) {
+            const key = keys[i]
+            if (page?.key !== key) throw new Error('主机返回的便签批次无效')
+            const updated = page.separate ? await request(connection, 'get', key, token) : page
+            if (updated.doc) await accept(key, previous[i], updated, false)
+          }
+          offset += pages.length
         }
         await request(connection, 'finish', undefined, token)
         token = undefined
         if (readOnly) await reconcile(remote)
+        syncedRevision = notesRevision(response.categories, remote)
         verified = true
         last = new Date().toISOString()
         error = ''

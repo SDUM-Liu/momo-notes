@@ -81,6 +81,13 @@ export function createMobileBridge() {
   let privatePickerUntil = 0
   const privatePickerActive = () => Boolean(ordinaryBrowser && Date.now() < privatePickerUntil)
   let privateLockListener = noop, ordinaryBrowser, privateWebPage = false
+  const privateCredential = () => {
+    if (!native) return null
+    if (hostSelected) return 'book-password/primary/' + primaryPrefix
+    const room = sync.state().sshHintScope
+    return room ? 'book-password/paired/' + room : null
+  }
+  const missingBookPassword = () => Object.assign(new Error('请重新输入独立口令和六位验证码'), { code: 'BOOK_PASSWORD_REQUIRED' })
   const followerBook = remoteBook((op, args) => sync.remoteBook(op, args), () => restorePrivateBrowser(true))
   const bookOperation = mobileBook(
     async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
@@ -98,12 +105,36 @@ export function createMobileBridge() {
     }
     const operation = hostSelected ? bookOperation : followerBook
     if (locking && !hostSelected) restorePrivateBrowser(op === 'background')
-    const result = await operation(op, args)
+    const credential = locking ? null : privateCredential()
+    let result
+    if (op === 'begin') {
+      result = await operation(op, args)
+      const remembered = credential && !result.uri && await SecureStorage.getItem(credential).catch(() => null)
+      return { ...result, remembered: typeof remembered === 'string' && remembered.length >= 12 }
+    }
     if (op === 'unlock') {
+      const entered = typeof args?.password === 'string'
+      const password = entered ? args.password : credential && await SecureStorage.getItem(credential).catch(() => null)
+      if (typeof password !== 'string') throw missingBookPassword()
+      if (credential !== privateCredential() || changingRole || transferringRole || document.hidden) throw missingBookPassword()
+      try { result = await operation(op, { password, code: args.code }) }
+      catch (error) {
+        if (!entered && /口令错误或文件/.test(error?.message || '')) {
+          if (credential) await SecureStorage.removeItem(credential).catch(noop)
+          throw missingBookPassword()
+        }
+        throw error
+      }
+      if (entered && credential && credential === privateCredential()) {
+        void SecureStorage.setItem(credential, password).catch(noop)
+      }
       ordinaryBrowser = browser
       browser = { url: '', loading: false, canGoBack: false }
       onBrowser(browser)
-    } else if (locking) restorePrivateBrowser(op === 'background')
+    } else {
+      result = await operation(op, args)
+      if (locking) restorePrivateBrowser(op === 'background')
+    }
     return result
   }
   function restorePrivateBrowser(notify) {
@@ -550,6 +581,10 @@ export function createMobileBridge() {
       return sync.sshHint(scope, value)
     },
     wifiAddress: platform === 'android' && native ? async () => (await syncTransport.wifiAddress()).address : undefined,
+    ...(platform === 'android' && native && Capacitor.isPluginAvailable('MomoSync') && {
+      termuxStatus: () => syncTransport.termuxStatus(),
+      openTermuxSetup: () => syncTransport.openTermuxSetup(),
+    }),
     async selectSyncRole(role) {
       await init
       if (changingRole) throw new Error('正在切换设备角色')
@@ -585,9 +620,14 @@ export function createMobileBridge() {
     async pairSync(code) {
       await init
       if (hostSelected || changingRole) throw new Error('请先切换为从设备')
-      if (host.owns(parsePairing(code).key)) throw new Error('不能配对本机的配对码')
+      const next = parsePairing(code)
+      if (host.owns(next.key)) throw new Error('不能配对本机的配对码')
+      const previous = privateCredential()
       await privateBook('background')
-      try { return await sync.pairWith(code) } finally { updates.routeChanged() }
+      try { return await sync.pairWith(code) } finally {
+        if (previous && previous !== privateCredential()) await SecureStorage.removeItem(previous).catch(noop)
+        updates.routeChanged()
+      }
     },
     testSync: sync.test,
     testTcpProbe: async code => { await init; return sync.testTcpProbe(tcpProbe, code) },
@@ -610,8 +650,10 @@ export function createMobileBridge() {
       }
     },
     async unpairSync() {
+      const credential = privateCredential()
       await privateBook('background')
       const result = await sync.unpair()
+      if (credential) await SecureStorage.removeItem(credential).catch(noop)
       syncLink.close()
       updates.routeChanged()
       return result

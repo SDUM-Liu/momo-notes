@@ -39,6 +39,7 @@ export function desktopFollower(api) {
   const refresh = () => initial.then(sync.run).catch(() => {})
   void refresh()
   setInterval(refresh, 20000)
+  setInterval(() => { void initial.then(sync.probe).catch(() => {}) }, 2500)
   window.addEventListener('focus', refresh)
   return {
     ...api,

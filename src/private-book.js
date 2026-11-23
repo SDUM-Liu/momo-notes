@@ -4,14 +4,25 @@ export function wirePrivateBook(api, enter) {
   const dialog = $('book-dialog'), issue = $('project-issues'), repo = $('project-repo')
   let generation = 0, timer, clockTimer, handedOff = false, phase = 'closed'
   const form = $('book-auth'), password = $('book-password'), code = $('book-code')
+  const passwordField = $('book-password-field'), usePassword = $('book-use-password')
+  let otpOnly = false
   const authButton = form.querySelector('button[type=submit], button:not([type])')
   const status = text => { $('book-status').textContent = text }
   function formState(next) {
     phase = next
-    password.disabled = code.disabled = next !== 'ready'
+    passwordField.hidden = otpOnly
+    password.disabled = otpOnly || next !== 'ready'
+    code.disabled = next !== 'ready'
+    usePassword.hidden = !otpOnly || next !== 'ready'
     authButton.disabled = next !== 'ready' && next !== 'retry'
     authButton.formNoValidate = next === 'retry'
     authButton.textContent = next === 'retry' ? '重新检查' : next === 'unlocking' ? '正在验证…' : '解锁'
+  }
+  usePassword.onclick = () => {
+    otpOnly = false
+    formState('ready')
+    status('请输入独立口令和身份验证器当前显示的六位码。')
+    password.focus()
   }
   $('book-code').oninput = event => {
     const input = event.target
@@ -20,6 +31,7 @@ export function wirePrivateBook(api, enter) {
   function touch() { clearTimeout(timer); timer = setTimeout(() => dialog.close(), 295000) }
   function clear() {
     ++generation; clearTimeout(timer); clearInterval(clockTimer)
+    otpOnly = false
     formState('closed')
     form.reset()
     $('book-qr').removeAttribute('src'); $('book-qr').hidden = true
@@ -44,8 +56,9 @@ export function wirePrivateBook(api, enter) {
     $('book-qr').removeAttribute('src'); $('book-qr').hidden = true
     $('book-account').textContent = ''; $('book-account').hidden = true
     try {
-      const { uri, label, expires } = await api.privateBook('begin')
+      const { uri, label, expires, remembered } = await api.privateBook('begin')
       if (!dialog.open || generation !== version) return
+      otpOnly = !uri && remembered === true
       if (uri) {
         const qr = await import('qrcode')
         const src = await qr.toDataURL(uri)
@@ -54,7 +67,7 @@ export function wirePrivateBook(api, enter) {
         $('book-account').textContent = '身份验证器条目：' + label + '。二维码有效至 ' + new Date(expires).toLocaleTimeString() + '。'
         $('book-account').hidden = false
         status('请扫描本页二维码，选择上方编号的条目，并输入当前六位码完成绑定。')
-      } else status('请输入独立口令和身份验证器当前显示的六位码。')
+      } else status(otpOnly ? '请输入身份验证器当前显示的六位码。' : '请输入独立口令和身份验证器当前显示的六位码。')
       formState('ready'); touch()
     } catch (error) {
       if (dialog.open && generation === version) {
@@ -87,7 +100,7 @@ export function wirePrivateBook(api, enter) {
     const version = generation
     let unlocked = false
     try {
-      const data = await api.privateBook('unlock', { password: password.value, code: code.value })
+      const data = await api.privateBook('unlock', { ...(otpOnly ? {} : { password: password.value }), code: code.value })
       unlocked = true
       if (!dialog.open || generation !== version) return
       if (document.hidden) { dialog.close(); return }
@@ -100,6 +113,7 @@ export function wirePrivateBook(api, enter) {
       if (dialog.open && generation === version) {
         code.value = ''
         status(error?.message || '验证失败，请重试。')
+        if (otpOnly && (error?.code === 'BOOK_PASSWORD_REQUIRED' || /请重新输入独立口令/.test(error?.message || ''))) otpOnly = false
         const restart = unlocked || ['BOOK_UNAVAILABLE','BOOK_STALE'].includes(error?.code) || /二维码已过期/.test(error?.message || '')
         formState(restart ? 'retry' : 'ready')
       }

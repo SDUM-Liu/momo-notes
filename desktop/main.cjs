@@ -199,15 +199,40 @@ function registerIPC() {
   handle('private:book', (op, data) => {
     if (op !== 'lock' && (mode !== 'note' || follower.store)) throw new Error('请在主设备上打开')
     if (op === 'unlock' && (asking || codex.busy())) throw new Error('请先结束当前 AI 任务')
-    const result = remoteBook.local(op, data)
+    const canRemember = safeStorage.isEncryptionAvailable() &&
+      (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text')
+    const credential = path.join(profileDirectory, 'private-book-password.os')
+    function rememberedPassword() {
+      if (!canRemember) return
+      try { return safeStorage.decryptString(fs.readFileSync(credential)) }
+      catch {}
+    }
+    const entered = typeof data?.password === 'string'
+    const password = op === 'unlock' && !entered ? rememberedPassword() : data?.password
+    if (op === 'unlock' && typeof password !== 'string') throw new Error('请重新输入独立口令和六位验证码')
+    let result
+    try { result = remoteBook.local(op, op === 'unlock' ? { password, code: data.code } : data) }
+    catch (error) {
+      if (op === 'unlock' && !entered && /口令错误或文件/.test(error.message)) {
+        try { fs.unlinkSync(credential) } catch {}
+        throw new Error('请重新输入独立口令和六位验证码')
+      }
+      throw error
+    }
     if (op === 'unlock') {
+      if (canRemember && entered) {
+        try {
+          fs.writeFileSync(credential + '.tmp', safeStorage.encryptString(password), { mode: 0o600 })
+          fs.renameSync(credential + '.tmp', credential)
+        } catch {}
+      }
       restoreBrowser()
       ordinaryBrowser = browser
       ordinaryBrowser.hide()
       browser = makeBrowser('momo-private-' + require('node:crypto').randomUUID())
       win.webContents.send('browser:changed', browser.state)
     } else if (op === 'lock' || op === 'begin') restoreBrowser()
-    return result
+    return op === 'begin' && !result?.uri ? { ...result, remembered: Boolean(rememberedPassword()) } : result
   })
   for (const op of ['target', 'ready', 'prepare', 'receive', 'chunk', 'mediaChunk', 'cutover', 'pending', 'finish'])
     handle('handoff:' + op, (...args) => transfer[op](...args))

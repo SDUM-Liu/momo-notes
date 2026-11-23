@@ -4,7 +4,7 @@ const http = require('node:http')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
-const { randomBytes, randomUUID } = require('node:crypto')
+const { randomBytes, randomUUID, createCipheriv, createDecipheriv } = require('node:crypto')
 const { spawn } = require('node:child_process')
 const { setTimeout: delay } = require('node:timers/promises')
 const { chromium, _electron } = require(process.env.MOMO_PLAYWRIGHT || 'playwright')
@@ -70,12 +70,24 @@ async function pairHost(app, url) {
 }
 
 async function configurePhone(page, secure) {
+  const deviceKey = randomBytes(32)
   await page.exposeFunction('fixtureNative', (plugin, method, options) => {
     if (plugin === 'App' && method === 'getLaunchUrl' || plugin === 'MomoSync' && method === 'updateWidget') return {}
     if (plugin === 'MomoUpdates' && method === 'pending') return { status:'ready', target:'' }
     if (plugin === 'SecureStorage') {
-      if (method === 'internalGetItem') return { data:secure.get(options.prefixedKey) ?? null }
-      if (method === 'internalSetItem') { secure.set(options.prefixedKey, options.data); return {} }
+      if (method === 'internalGetItem') {
+        const value = secure.get(options.prefixedKey)
+        if (!value) return { data:null }
+        const decipher = createDecipheriv('aes-256-gcm', deviceKey, value.iv)
+        decipher.setAuthTag(value.tag)
+        return { data:Buffer.concat([decipher.update(value.data), decipher.final()]).toString('utf8') }
+      }
+      if (method === 'internalSetItem') {
+        const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', deviceKey, iv)
+        const data = Buffer.concat([cipher.update(options.data), cipher.final()])
+        secure.set(options.prefixedKey, { iv, data, tag:cipher.getAuthTag() })
+        return {}
+      }
       if (method === 'internalRemoveItem') { secure.delete(options.prefixedKey); return {} }
     }
     throw new Error('Unexpected Android call ' + plugin + '.' + method)
@@ -105,7 +117,7 @@ async function configurePhone(page, secure) {
   })
 }
 
-async function unlock(page, secretStep) {
+async function unlock(page, secretStep, remembered = false) {
   await page.locator('#settings').click()
   const from = page.locator('#project-issues'), to = page.locator('#project-repo')
   await from.scrollIntoViewIfNeeded()
@@ -118,12 +130,13 @@ async function unlock(page, secretStep) {
       await session.send('Input.dispatchTouchEvent', { type, touchPoints:points })
     }
   } finally { await session.detach() }
-  await page.locator('#book-password:enabled').waitFor()
+  await page.locator('#book-code:enabled').waitFor()
   assert(await page.locator('#book-qr').isHidden(), 'A follower should use the existing enrollment')
-  await page.locator('#book-password').fill(password)
+  if (remembered) assert(await page.locator('#book-password').isHidden())
+  else await page.locator('#book-password').fill(password)
   const step = Math.max(Math.floor(Date.now() / 30000), secretStep ?? 0)
   await page.locator('#book-code').fill(token(secret, step))
-  await page.locator('#book-auth button').click()
+  await page.locator('#book-auth button[type="submit"]').click()
   await page.locator('#book-return').waitFor()
   await page.locator('#book-dialog').waitFor({state:'hidden'})
   return step
@@ -234,7 +247,7 @@ async function main() {
     await page.evaluate(() => window.fixtureForeground(true))
     // Leave the host's independent 1.5 s authentication throttle intact.
     await delay(1600)
-    await unlock(page, step + 1)
+    await unlock(page, step + 1, true)
     await editor.getByText(edited, {exact:true}).waitFor()
     relay.kill()
     await lockedScreen(page)

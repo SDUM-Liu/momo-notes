@@ -22,6 +22,8 @@ export function relayOrigin(value) {
 }
 
 export const digest = value => hex(sha256(encoder.encode(value)))
+export const notesRevision = (categories, revisions) => digest(JSON.stringify([categories, revisions]))
+export const noteBatchSize = 24
 export const transferId = () => hex(crypto.getRandomValues(new Uint8Array(16)))
 
 export function joinToken(key) {

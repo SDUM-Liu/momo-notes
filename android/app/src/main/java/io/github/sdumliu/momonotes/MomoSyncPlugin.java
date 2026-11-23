@@ -5,9 +5,17 @@ import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +36,14 @@ import org.json.JSONObject;
 
 @CapacitorPlugin(name = "MomoSync")
 public class MomoSyncPlugin extends Plugin {
+    private static final String TERMUX_PACKAGE = "com.termux";
+    private static final int TERMUX_SSH_PORT = 8023;
+    private static final String TERMUX_SETUP = "(command -v sshd >/dev/null || pkg install -y openssh)"
+        + " && (test -f \"$HOME/.momo-ssh-configured\" || (passwd && touch \"$HOME/.momo-ssh-configured\"))"
+        + " && ssh-keygen -A && sshd -f /dev/null"
+        + " -o AddressFamily=inet -o ListenAddress=127.0.0.1 -o Port=8023"
+        + " -o PidFile=\"$HOME/.momo-sshd.pid\" -o PasswordAuthentication=yes"
+        + " -o PermitEmptyPasswords=no -o AllowTcpForwarding=no -o X11Forwarding=no -o GatewayPorts=no";
     private final LocalSsh ssh = new LocalSsh();
     private final TcpProbe tcpProbe = new TcpProbe();
     private final OkHttpClient client = new OkHttpClient.Builder()
@@ -37,6 +53,51 @@ public class MomoSyncPlugin extends Plugin {
     private java.io.OutputStream backupStream;
     private android.net.Uri backupUri;
     private String backupToken;
+
+    @PluginMethod
+    public void termuxStatus(PluginCall call) {
+        final int uid;
+        try {
+            uid = getContext().getPackageManager().getApplicationInfo(TERMUX_PACKAGE, 0).uid;
+        } catch (PackageManager.NameNotFoundException unavailable) {
+            call.resolve(new JSObject().put("installed", false));
+            return;
+        }
+        CompletableFuture.supplyAsync(() -> {
+            JSObject state = new JSObject().put("installed", true).put("port", TERMUX_SSH_PORT);
+            int appId = uid % 100000;
+            if (appId >= 10000 && appId < 20000) {
+                state.put("username", "u" + (uid / 100000) + "_a" + (appId - 10000));
+            }
+            try (Socket socket = new Socket()) {
+                socket.connect(new InetSocketAddress("127.0.0.1", TERMUX_SSH_PORT), 900);
+                socket.setSoTimeout(900);
+                byte[] banner = new byte[4];
+                new DataInputStream(socket.getInputStream()).readFully(banner);
+                state.put("ready", "SSH-".equals(new String(banner, StandardCharsets.US_ASCII)));
+            } catch (IOException unavailable) {
+                state.put("ready", false);
+            }
+            return state;
+        }).thenAccept(call::resolve);
+    }
+
+    @PluginMethod
+    public void openTermuxSetup(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            Intent termux = getContext().getPackageManager().getLaunchIntentForPackage(TERMUX_PACKAGE);
+            if (termux == null) { call.reject("请先安装官方 Termux"); return; }
+            ClipboardManager clipboard = getContext().getSystemService(ClipboardManager.class);
+            if (clipboard == null) { call.reject("无法访问系统剪贴板"); return; }
+            clipboard.setPrimaryClip(ClipData.newPlainText("桃桃 Termux 配置", TERMUX_SETUP));
+            try {
+                getActivity().startActivity(termux);
+                call.resolve();
+            } catch (android.content.ActivityNotFoundException unavailable) {
+                call.reject("无法打开 Termux，请从应用列表打开，再粘贴配置命令");
+            }
+        });
+    }
 
     @PluginMethod
     public void tcpProbePrepare(PluginCall call) {
