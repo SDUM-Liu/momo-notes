@@ -297,6 +297,16 @@ function drawState(value) {
 
   if (wasMode === 'note' && state.mode !== 'note' && view !== 'note') showView('note')
   mascotLabel()
+  if (value.awaitingPaint && api.windowPainted) {
+    const version = value.awaitingPaint
+    const wide = value.mode === 'note'
+    const confirm = () => {
+      if (state.awaitingPaint !== version) return
+      if ((innerWidth >= 200) !== wide) { requestAnimationFrame(confirm); return }
+      requestAnimationFrame(() => { void api.windowPainted(version) })
+    }
+    requestAnimationFrame(confirm)
+  }
   if (wasMode !== 'note' && state.mode === 'note') {
     showView('note')
     if (!editor || !currentDate) void loadNote()
@@ -459,7 +469,7 @@ async function loadNote(date, selected = category, navigate = true) {
   }
 }
 
-function wireDrag(element, click) {
+function wireDrag(element, click, direction) {
   if (api.mobile) {
     if (click) element.addEventListener('click', click)
     return
@@ -467,23 +477,23 @@ function wireDrag(element, click) {
   let active = false
   let pointerToggle = false
   let pointer
+  const point = event => ({ x: event.screenX, y: event.screenY })
   element.addEventListener('pointerdown', event => {
     if (event.button !== 0 || active) return
     pointerToggle = false
-    if (element === $('mascot') && state.mode === 'note') return
     pointerToggle = true
     active = true
     pointer = event.pointerId
     element.setPointerCapture(pointer)
-    api.dragStart()
+    api.dragStart(point(event), direction)
   })
   element.addEventListener('pointermove', event => {
-    if (active && event.pointerId === pointer) api.dragMove()
+    if (active && event.pointerId === pointer) api.dragMove(point(event))
   })
   element.addEventListener('pointerup', event => {
     if (!active || event.pointerId !== pointer) return
     active = false
-    api.dragEnd()
+    void api.dragEnd().then(moved => { if (!moved) return click?.() }).catch(() => {})
   })
   element.addEventListener('lostpointercapture', () => {
     if (!active) return
@@ -498,6 +508,16 @@ function wireDrag(element, click) {
 }
 
 if (!api.mobile) {
+  const handles = document.createElement('div')
+  handles.id = 'note-resize'
+  handles.setAttribute('aria-hidden', 'true')
+  for (const direction of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
+    const handle = document.createElement('div')
+    handle.dataset.resize = direction
+    handles.append(handle)
+    wireDrag(handle, undefined, direction)
+  }
+  document.body.append(handles)
   const hover = event => {
     if (event.pointerType === 'mouse' && !event.buttons && state?.mode === 'edge') api.edgeHover()
   }

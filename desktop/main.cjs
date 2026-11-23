@@ -2,7 +2,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, screen, session, protocol, dial
 const path = require('node:path')
 const fs = require('node:fs')
 const { openStore } = require('./data.cjs')
-const { dock, face, fit, position, nearestEdge } = require('./window.cjs')
+const { dock, face, fit, position, nearestEdge, resizeNote } = require('./window.cjs')
 const { answer, endpoint } = require('./ai.cjs')
 const { createUpdates } = require('./updates.cjs')
 const { desktopUpdateSource } = require('./update-source.cjs')
@@ -48,7 +48,9 @@ const publicSettings = () => {
   const { key, ...settings } = store.data.settings
   return { ...settings, openAtLogin: opensAtLogin(), hasKey: Boolean(key) }
 }
-const state = () => ({ mode, edge, today, settings: publicSettings(), update: updates.state,
+let paintVersion = 0, awaitingPaint, paintTimer
+let noteSize
+const state = () => ({ mode, edge, today, awaitingPaint, settings: publicSettings(), update: updates.state,
   browser: browser.state, categories: notesStore().data.categories, locked: notesLocked() })
 
 function syncState() {
@@ -70,11 +72,25 @@ function restoreBrowser() {
   closed.dispose()
   win.webContents.send('browser:changed', browser.state)
 }
+function finishResize(version) {
+  if (version !== awaitingPaint || version === undefined) return
+  awaitingPaint = undefined
+  clearTimeout(paintTimer)
+  if (!win.isDestroyed()) win.setOpacity(1)
+}
+
 function setMode(next, activate = true) {
   clearInterval(hoverTimer)
+  if (process.platform !== 'linux' && next !== mode && (next === 'note' || mode === 'note')) {
+    clearTimeout(paintTimer)
+    const version = ++paintVersion
+    awaitingPaint = version
+    win.setOpacity(0)
+    paintTimer = setTimeout(() => finishResize(version), 230)
+  }
   mode = next
   if (mode !== 'note') { remoteBook?.localLock(); restoreBrowser(); browser?.hide() }
-  win.setBounds(position(mode, currentArea(anchor), anchor, edge))
+  win.setBounds(position(mode, currentArea(anchor), anchor, edge, noteSize))
   syncState()
   if (activate && mode === 'note') {
     win.show()
@@ -192,8 +208,8 @@ function registerIPC() {
     if (!fromApp(event)) throw new Error('请求来源无效')
     return callback(...args)
   })
-  const on = (channel, callback) => ipcMain.on(channel, event => {
-    if (fromApp(event)) callback()
+  const on = (channel, callback) => ipcMain.on(channel, (event, ...args) => {
+    if (fromApp(event)) callback(...args)
   })
 
   handle('private:book', (op, data) => {
@@ -400,46 +416,55 @@ function registerIPC() {
     if (typeof url === 'string') return shell.openExternal(url)
   })
   on('window:edge-hover', revealDockedPet)
-  on('window:drag-start', () => {
-    drag = { start: screen.getCursorScreenPoint(), bounds: win.getBounds(), moved: false }
+  handle('window:painted', finishResize)
+  const dragPoint = value => Number.isFinite(value?.x) && Number.isFinite(value?.y)
+    ? { x: Math.round(value.x), y: Math.round(value.y) } : null
+  on('window:drag-start', (value, direction) => {
+    const start = dragPoint(value)
+    if (!start || (direction && (mode !== 'note' || !/^(n|s|e|w|ne|nw|se|sw)$/.test(direction)))) return
+    const bounds = win.getBounds()
+    drag = { start, bounds, direction, area: screen.getDisplayMatching(bounds).workArea, moved: false }
   })
-  on('window:drag-move', () => {
-    if (!drag) return
-    const point = screen.getCursorScreenPoint()
+  on('window:drag-move', value => {
+    const point = dragPoint(value)
+    if (!drag || !point) return
     const dx = point.x - drag.start.x
     const dy = point.y - drag.start.y
     if (Math.hypot(dx, dy) < 5 && !drag.moved) return
     drag.moved = true
+    if (drag.direction) {
+      win.setBounds(resizeNote(drag.bounds, drag.area, drag.direction, dx, dy))
+      return
+    }
     const area = currentArea(point)
     const bounds = fit({ ...drag.bounds, x: drag.bounds.x + dx, y: drag.bounds.y + dy }, area)
-    win.setBounds(store.data.settings.snap ? dock(bounds, area, nearestEdge(bounds, area)) : bounds)
+    win.setBounds(mode !== 'note' && store.data.settings.snap ? dock(bounds, area, nearestEdge(bounds, area)) : bounds)
   })
   on('window:drag-cancel', () => {
     if (drag) win.setBounds(drag.bounds)
     drag = null
   })
-  on('window:drag-end', () => {
-    if (!drag) return
-    const moved = drag?.moved
+  handle('window:drag-end', () => {
+    if (!drag) return true
+    const { moved, direction } = drag
     drag = null
-    if (!moved) {
-      if (mode !== 'note') toggle()
-      return
-    }
+    if (!moved) return false
     const bounds = win.getBounds()
-    const area = currentArea(screen.getCursorScreenPoint())
-    edge = store.data.settings.snap ? nearestEdge(bounds, area) : null
+    const area = screen.getDisplayMatching(bounds).workArea
+    edge = mode !== 'note' && store.data.settings.snap ? nearestEdge(bounds, area) : null
     anchor = face(mode, bounds)
+    if (direction) noteSize = { width: bounds.width, height: bounds.height }
     if (edge) {
       setMode('edge', false)
-    } else {
+    } else if (mode !== 'note') {
       setMode(mode === 'edge' ? 'pet' : mode, false)
     }
     try {
-      store.update({ position: { anchor, edge, faceAnchor: true } })
+      store.update({ position: { anchor, edge, faceAnchor: true, noteSize } })
     } catch {
       dialog.showErrorBox('桃桃便签', '窗口位置无法保存，请检查本地存储。')
     }
+    return true
   })
   handle('notes:dates', (category = defaultCategory) => {
     refreshDay()
@@ -531,6 +556,7 @@ function start() {
   today = localDay()
   const area = screen.getPrimaryDisplay().workArea
   const previous = store.data.position
+  noteSize = previous?.noteSize
   anchor = previous?.anchor ?? { x: area.x + area.width - 88, y: area.y + Math.round(area.height * 0.66) }
   const usableArea = currentArea(anchor)
   if (previous?.anchor && !previous.faceAnchor && !previous.edge) anchor = { ...anchor, y: anchor.y - 37 }

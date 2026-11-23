@@ -32,6 +32,20 @@ body[data-mode="edge"][data-edge="left"] .mascot img:not(.custom) { transform: s
 body[data-mode="note"] .mascot {
   inset: 1px 13px auto auto; width: 66px; height: 63px;
 }
+#note-resize { display: none; }
+body[data-mode="note"] #note-resize { display: block; }
+#note-resize > div { position: absolute; z-index: 4; touch-action: none; }
+[data-resize="n"], [data-resize="s"] { height: 8px; left: 16px; right: 16px; cursor: ns-resize; }
+[data-resize="n"] { top: 44px; right: 81px; }
+[data-resize="s"] { bottom: 0; }
+[data-resize="e"], [data-resize="w"] { width: 8px; top: 56px; bottom: 14px; cursor: ew-resize; }
+[data-resize="e"] { right: 0; }
+[data-resize="w"] { left: 0; }
+[data-resize="ne"], [data-resize="nw"], [data-resize="se"], [data-resize="sw"] { width: 16px; height: 14px; }
+[data-resize="ne"] { right: 0; top: 44px; cursor: nesw-resize; }
+[data-resize="nw"] { left: 0; top: 44px; cursor: nwse-resize; }
+[data-resize="se"] { right: 0; bottom: 0; cursor: nwse-resize; }
+[data-resize="sw"] { left: 0; bottom: 0; cursor: nesw-resize; }
 .panel {
   display: flex; flex-direction: column; position: absolute; inset: 48px 4px 4px;
   border: 1px solid #f2dadf; border-radius: 16px;
@@ -409,6 +423,9 @@ html[data-momo-floating="true"] body[data-platform="mobile"] .foot { padding-rig
   body:not([data-platform="mobile"]) #panel { display: none !important; }
 }
 @media (prefers-reduced-motion: no-preference) {
+  body:not([data-platform="mobile"])[data-mode="note"] :is(.panel, .mascot) {
+    animation: open-note 150ms ease-out; transform-origin: top right;
+  }
   body[data-platform="mobile"][data-mode="note"] .panel { animation: open-note 150ms ease-out; transform-origin: top right; }
   html[data-momo-floating="true"] body[data-mode="note"] .panel { animation-name: open-floating-note; }
   @keyframes open-note { from { opacity: .65; scale: .985; } }

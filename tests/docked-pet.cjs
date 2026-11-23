@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { _electron } = require(process.env.MOMO_PLAYWRIGHT || 'playwright')
 const { openStore } = require('../desktop/data.cjs')
-const { face, position, dock, nearestEdge } = require('../desktop/window.cjs')
+const { face, position, dock, nearestEdge, resizeNote } = require('../desktop/window.cjs')
 
 async function test() {
   const area = { x: -1600, y: 0, width: 1600, height: 900 }
@@ -19,6 +19,9 @@ async function test() {
   }
   const near = { x: area.x + 12, y: 200, width: 74, height: 148 }
   assert.equal(dock(near, area, nearestEdge(near, area)).x, area.x)
+  const box = { x: -800, y: 200, width: 500, height: 400 }
+  assert.deepEqual(resizeNote(box, area, 'nw', -40, 35), { x: -840, y: 235, width: 540, height: 365 })
+  assert.deepEqual(resizeNote(box, area, 'se', -1000, -1000), { ...box, width: 360, height: 300 })
 
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'momo-docked-pet-'))
   openStore(profile).update({ position: { anchor: { x: 1, y: 180 }, edge: 'left', faceAnchor: true } })
@@ -71,11 +74,54 @@ async function test() {
     await app.evaluate(() => { globalThis.cursor.x -= 150 })
     await pet.dispatchEvent('pointerenter', { pointerType: 'mouse' })
     await mode('pet')
+    await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0], setBounds = win.setBounds
+      globalThis.openingOpacity = undefined
+      win.setBounds = function(bounds, ...rest) {
+        if (bounds.width >= 200) globalThis.openingOpacity = win.getOpacity()
+        return setBounds.call(win, bounds, ...rest)
+      }
+    })
     await pet.click()
     await mode('note')
+    if (process.platform !== 'linux') assert.equal(await app.evaluate(() => globalThis.openingOpacity), 0)
     await pet.click()
     await mode('edge')
-    console.log('PASS docking on four edges, face alignment, hover reveal, pointer exit and click')
+    await pet.click()
+    await mode('note')
+    const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds())
+    await pet.click({ trial: true })
+    const before = await bounds()
+    async function dragBy(locator, dx, dy, expected) {
+      const handle = await locator.boundingBox()
+      const x = handle.x + handle.width / 2, y = handle.y + handle.height / 2
+      await page.mouse.move(x, y)
+      await page.mouse.down()
+      await page.mouse.move(x + dx, y + dy)
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (expected(await bounds())) break
+        await page.waitForTimeout(20)
+      }
+      await page.mouse.up()
+    }
+    await dragBy(pet, 60, 0, b => b.x !== before.x)
+    await mode('note')
+    assert.notEqual((await bounds()).x, before.x)
+    const moved = await bounds()
+    await dragBy(page.locator('[data-resize=se]'), -40, -35, b => b.width !== moved.width)
+    const resized = await bounds()
+    assert.equal(resized.x, moved.x)
+    assert.equal(resized.y, moved.y)
+    assert(Math.abs(resized.width - (moved.width - 40)) <= 1)
+    assert(Math.abs(resized.height - (moved.height - 35)) <= 1)
+    await pet.click()
+    await mode('pet')
+    await pet.click()
+    await mode('note')
+    const reopened = await bounds()
+    assert(Math.abs(reopened.width - resized.width) <= 1)
+    assert(Math.abs(reopened.height - resized.height) <= 1)
+    console.log('PASS docking, opacity guard, expanded mascot dragging and persistent window resize')
   } finally {
     await app.close()
   }
