@@ -13,7 +13,16 @@ export function isPublicProbeEndpoint(value) {
   return !(a === 198 && (b === 18 || b === 19 || b === 51 && c === 100) || a === 203 && b === 0 && c === 113)
 }
 
-export const isUdpEndpoints = value => Array.isArray(value) && value.length >= 1 && value.length <= 2 && value.every(isPublicProbeEndpoint) && new Set(value).size === value.length
+export const isUdpEndpoints = value => Array.isArray(value) && value.length >= 1 && value.length <= 4 && value.every(isPublicProbeEndpoint)
+
+function predictable(values) {
+  if (values.length < 3) return false
+  const [[ipA,a],[ipB,b],[ipC,c]] = values.slice(-3).map(value => value.split(':'))
+  const step = Number(c) - Number(b)
+  const next = Number(c) + step
+  return ipA === ipC && ipB === ipC && step !== 0 && Math.abs(step) <= 16 &&
+    step === Number(b) - Number(a) && next >= 1024 && next <= 65535
+}
 
 const reasons = new Map([
   ['observer_unavailable', 'observer_unavailable'], ['invalid_mapping', 'observer_unavailable'],
@@ -55,10 +64,10 @@ function bounded(promise, signal, ms) {
 export async function pairedTcpProbe(local, request, device, signal, transport = "tcp") {
   if (!local?.prepare || !local.run || !local.cancel) return { status: 'unsupported' }
   const id = transferId()
-  const valid = transport === "udp" ? isUdpEndpoints : isPublicProbeEndpoint
+  const valid = transport === 'tcp' ? isPublicProbeEndpoint : isUdpEndpoints
   const remote = (op, data = {}) => request(transport + '-probe-' + op, { id, device, ...data })
   const cleanup = fn => { void Promise.resolve().then(fn).catch(() => {}) }
-  let preparing = false, finished = false
+  let preparing = false, finished = false, prediction
   async function endpoint(prepare, cancel) {
     const result = await prepare()
     if (finished || signal.aborted) { cleanup(cancel); fail('cancelled') }
@@ -82,14 +91,15 @@ export async function pairedTcpProbe(local, request, device, signal, transport =
       endpoint(() => remote('prepare'), () => remote('cancel')),
     ]), signal, 30000)
     if (signal.aborted) fail('cancelled')
+    if (transport === 'udp-predict') prediction = { local: predictable(own), primary: predictable(peer) }
     const token = transferId() + transferId()
     await bounded(Promise.all([
       run(() => local.run(id, peer, token)),
       run(() => remote('run', { endpoint: own, token })),
     ]), signal, 45000)
-    return { status: 'direct' }
+    return { status: 'direct', ...(prediction && { prediction }) }
   } catch (failure) {
-    return { status: statusFor(failure) }
+    return { status: statusFor(failure), ...(prediction && { prediction }) }
   } finally {
     finished = true
     if (preparing) {

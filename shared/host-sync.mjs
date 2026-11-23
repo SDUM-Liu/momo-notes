@@ -25,7 +25,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
     const udp = op.startsWith("udp-")
     const backend = udp ? udpProbe : tcpProbe
     const valid = udp ? isUdpEndpoints : isPublicProbeEndpoint
-    const action = op.slice(10)
+    const action = op.split('-').at(-1)
     if (!backend) return { ok: false, reason: 'unsupported' }
     const owner = sshOwner(payload?.device?.sshProof)
     const device = config.devices?.find(d => d.id === payload?.device?.id)
@@ -46,7 +46,8 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
           return { ok: false, reason: result?.reason || 'observer_unavailable' }
         }
         probe.phase = 'ready'
-        return { endpoint: result.endpoint }
+        const endpoint = op === 'udp-probe-prepare' ? [...new Set(result.endpoint)].slice(0, 2) : result.endpoint
+        return { endpoint }
       } catch (error) {
         cancelProbe(probe)
         return { ok: false, reason: error?.code || 'observer_unavailable' }
@@ -284,7 +285,7 @@ export function createHostSync({ config = {}, store, ask, notify, codex, update,
         const device = config.devices?.find(d => d.id === payload?.device?.id)
         if (!owner || device?.sshOwner !== owner) throw new Error('无法验证本设备，请先完成一次同步')
         value = await remoteBook.call(device.id, request.op.slice(13), payload)
-      } else if (/^(tcp|udp)-probe-(prepare|run|cancel)$/.test(request.op)) value = await testProbe(request.op, request.payload)
+      } else if (/^(tcp|udp|udp-predict)-probe-(prepare|run|cancel)$/.test(request.op)) value = await testProbe(request.op, request.payload)
       else if (request.op?.startsWith?.('update/') && update) value = await update(request.op.slice(7), request.payload)
       else value = await enqueue(() => {
         if (!enabled() || config.key !== key) throw new Error('主设备已停止同步')

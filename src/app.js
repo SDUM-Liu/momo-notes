@@ -1151,7 +1151,13 @@ $('sync-udp-test').onclick = async event => {
     const current = await api.testSync('')
     const result = await api.testUdpProbe('')
     if (revision === testRevision) {
-      status.textContent = '当前同步使用' + syncPathLabel(current) + '。' + (messages[result?.status] || '两端未能完成协调，请检查主设备连接。')
+      const eligible = result?.prediction
+      const devices = eligible && [eligible.local && '本设备', eligible.primary && '主设备'].filter(Boolean)
+      const detail = !devices ? '' : devices.length
+        ? devices.join('、') + '测到了可用于预测的端口分配规律。'
+        : '两端本轮均未测到足够一致的端口分配规律。'
+      status.textContent = '当前同步使用' + syncPathLabel(current) + '。' +
+        (messages[result?.status] || '两端未能完成协调，请检查主设备连接。') + detail
     }
   } catch (error) {
     if (revision === testRevision) status.textContent = errorMessage(error)

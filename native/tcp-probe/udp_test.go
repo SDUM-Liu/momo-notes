@@ -7,6 +7,33 @@ import (
 	"time"
 )
 
+func TestUDPPredictionRequiresConsistentSamples(t *testing.T) {
+	samples := func(values ...string) []netip.AddrPort {
+		result := []netip.AddrPort{}
+		for _, value := range values {
+			result = append(result, netip.MustParseAddrPort(value))
+		}
+		return result
+	}
+	got := predictUDPPorts(samples("1.1.1.1:50000", "1.1.1.1:50002", "1.1.1.1:50004"))
+	want := samples("1.1.1.1:50006", "1.1.1.1:50008", "1.1.1.1:50010", "1.1.1.1:50012")
+	for i, item := range want {
+		if len(got) != len(want) || item != got[i] {
+			t.Fatalf("unexpected predictions: %v", got)
+		}
+	}
+	for _, items := range [][]netip.AddrPort{
+		samples("1.1.1.1:50000", "1.1.1.1:50002"),
+		samples("1.1.1.1:50000", "1.1.1.1:50001", "1.1.1.1:50006"),
+		samples("1.1.1.1:50000", "1.1.1.1:50000", "1.1.1.1:50000"),
+		samples("1.1.1.1:50000", "8.8.8.8:50002", "1.1.1.1:50004"),
+	} {
+		if got := predictUDPPorts(items); len(got) > 0 {
+			t.Fatalf("ambiguous samples must not predict: %v", got)
+		}
+	}
+}
+
 func TestUDPPeersProveBothDirections(t *testing.T) {
 	first, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

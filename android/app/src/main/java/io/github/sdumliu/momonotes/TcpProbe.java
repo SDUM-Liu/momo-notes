@@ -25,6 +25,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -227,19 +228,20 @@ final class TcpProbe {
         try {
             DatagramSocket socket = track(session, new DatagramSocket(new InetSocketAddress("0.0.0.0", 0)));
             List<String> mappings = new ArrayList<>();
-            String[] hosts = {"stun.cloudflare.com", "stun.l.google.com"};
-            int[] ports = {3478, 19302};
+            Set<InetAddress> observers = new HashSet<>();
+            String[] hosts = {"stun.cloudflare.com", "stunserver2025.stunprotocol.org", "stun.l.google.com", "stun1.l.google.com"};
+            int[] ports = {3478, 3478, 19302, 19302};
             for (int i = 0; i < hosts.length && current(session); i++) {
                 try {
                     String host = hosts[i];
                     Future<InetAddress[]> query = workers.submit(() -> resolver.lookup(host));
                     InetAddress[] addresses;
-                    try { addresses = query.get(3, TimeUnit.SECONDS); }
+                    try { addresses = query.get(1500, TimeUnit.MILLISECONDS); }
                     finally { query.cancel(true); }
                     for (InetAddress ip : addresses) {
-                        if (!isPublic(ip)) continue;
+                        if (!isPublic(ip) || !observers.add(ip)) continue;
                         String mapped = mapUdp(socket, new InetSocketAddress(ip, ports[i]));
-                        if (mapped != null && !mappings.contains(mapped)) mappings.add(mapped);
+                        if (mapped != null) mappings.add(mapped);
                         break;
                     }
                 } catch (IOException | ExecutionException | TimeoutException | RejectedExecutionException ignored) {}
@@ -280,12 +282,12 @@ final class TcpProbe {
         Session session = active;
         if (session == null || !session.id.equals(id) || session.datagram == null) return failure("expired");
         if (session.running) return failure("busy");
-        if (targets.isEmpty() || targets.size() > 2 || token == null || !token.matches("[0-9a-f]{64}")) return failure("invalid_peer");
+        if (targets.isEmpty() || targets.size() > 4 || token == null || !token.matches("[0-9a-f]{64}")) return failure("invalid_peer");
         List<InetSocketAddress> peers = new ArrayList<>();
         try {
             for (String target : targets) {
                 InetSocketAddress address = endpoint(target);
-                if (!session.mappings.contains(target) && !peers.contains(address)) peers.add(address);
+                if (!session.mappings.contains(target)) peers.add(address);
             }
         } catch (IOException invalid) { return failure("invalid_peer"); }
         if (peers.isEmpty()) return failure("invalid_peer");
@@ -311,10 +313,14 @@ final class TcpProbe {
         RANDOM.nextBytes(nonce);
         System.arraycopy(nonce, 0, outgoing, 0, 16);
         InetSocketAddress learned = null;
+        List<InetSocketAddress> predictions = predictUdpPorts(targets);
+        Set<InetSocketAddress> destinations = new LinkedHashSet<>(targets);
+        int round = 0;
         long verified = 0, end = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
         while (System.nanoTime() < end) {
             System.arraycopy(udpTag(mac,outgoing),0,outgoing,32,32);
-            for (InetSocketAddress peer : targets) sendProbe(socket, outgoing, peer);
+            for (InetSocketAddress peer : destinations) sendProbe(socket, outgoing, peer);
+            if (learned == null && !predictions.isEmpty()) sendProbe(socket, outgoing, predictions.get(round++ % predictions.size()));
             if (learned != null && !targets.contains(learned)) sendProbe(socket, outgoing, learned);
             long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(170);
             while (System.nanoTime() < until) {
@@ -332,6 +338,22 @@ final class TcpProbe {
             if (verified!=0 && System.nanoTime()-verified >= TimeUnit.SECONDS.toNanos(1)) return true;
         }
         return false;
+    }
+
+    static List<InetSocketAddress> predictUdpPorts(List<InetSocketAddress> targets) {
+        List<InetSocketAddress> result = new ArrayList<>();
+        if (targets.size() < 3) return result;
+        int last = targets.size() - 1;
+        InetSocketAddress a = targets.get(last-2), b = targets.get(last-1), c = targets.get(last);
+        int step = c.getPort() - b.getPort();
+        if (!a.getAddress().equals(c.getAddress()) || !b.getAddress().equals(c.getAddress()) ||
+                step == 0 || Math.abs(step) > 16 || step != b.getPort() - a.getPort()) return result;
+        for (int n = 1; n <= 4; n++) {
+            int port = c.getPort() + n*step;
+            if (port < 1024 || port > 65535) break;
+            result.add(new InetSocketAddress(c.getAddress(), port));
+        }
+        return result;
     }
 
     private static byte[] udpTag(Mac mac, byte[] packet) {

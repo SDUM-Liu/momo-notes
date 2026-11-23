@@ -125,7 +125,7 @@ public class MomoSyncPlugin extends Plugin {
     public void udpProbeRun(PluginCall call) {
         JSONArray values = call.getArray("endpoints");
         List<String> targets = new ArrayList<>();
-        if (values != null && values.length() <= 2) {
+        if (values != null && values.length() <= 4) {
             for (int i = 0; i < values.length(); i++) targets.add(values.optString(i, ""));
         }
         probeReply(call, tcpProbe.runUdp(call.getString("id"), targets, call.getString("token")));

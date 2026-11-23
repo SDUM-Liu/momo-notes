@@ -635,7 +635,7 @@ export function createMobileBridge() {
       }
     },
     testSync: sync.test,
-    testUdpProbe: async code => { await init; return sync.testTcpProbe(udpProbe, code, 'udp') },
+    testUdpProbe: async code => { await init; return sync.testTcpProbe(udpProbe, code, 'udp-predict') },
     testTcpProbe: async code => { await init; return sync.testTcpProbe(tcpProbe, code) },
     async scanSyncCode() {
       if (floatingPet) {

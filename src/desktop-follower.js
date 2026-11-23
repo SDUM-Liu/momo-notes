@@ -99,7 +99,7 @@ export function desktopFollower(api) {
     testSync: async code => { await initial; return sync.test(code) },
     testUdpProbe: async code => {
       await initial
-      return sync.testTcpProbe({ prepare: api.udpProbePrepare, run: api.udpProbeRun, cancel: api.udpProbeCancel }, code, 'udp')
+      return sync.testTcpProbe({ prepare: api.udpProbePrepare, run: api.udpProbeRun, cancel: api.udpProbeCancel }, code, 'udp-predict')
     },
     testTcpProbe: async code => {
       await initial

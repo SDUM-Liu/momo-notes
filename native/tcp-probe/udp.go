@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -78,10 +79,23 @@ func punchUDP(socket *net.UDPConn, peers []netip.AddrPort, key []byte, timeout t
 	var learned netip.AddrPort
 	var firstVerified time.Time
 	until := time.Now().Add(timeout)
+	predictions := predictUDPPorts(peers)
+	unique := []netip.AddrPort{}
+	for _, peer := range peers {
+		if !slices.Contains(unique, peer) {
+			unique = append(unique, peer)
+		}
+	}
+	peers = unique
+	round := 0
 	for time.Now().Before(until) {
 		copy(outgoing[32:], udpTag(key, outgoing[:32]))
 		for _, peer := range peers {
 			socket.WriteToUDPAddrPort(outgoing[:], peer)
+		}
+		if !learned.IsValid() && len(predictions) > 0 {
+			socket.WriteToUDPAddrPort(outgoing[:], predictions[round%len(predictions)])
+			round++
 		}
 		if learned.IsValid() {
 			known := false
@@ -119,6 +133,29 @@ func punchUDP(socket *net.UDPConn, peers []netip.AddrPort, key []byte, timeout t
 	return false
 }
 
+// Observations must agree on the public IP and two consecutive port steps.
+func predictUDPPorts(peers []netip.AddrPort) []netip.AddrPort {
+	if len(peers) < 3 {
+		return nil
+	}
+	last := len(peers) - 1
+	a, b, c := peers[last-2], peers[last-1], peers[last]
+	step := int(c.Port()) - int(b.Port())
+	if a.Addr() != c.Addr() || b.Addr() != c.Addr() ||
+		step == 0 || step < -16 || step > 16 || step != int(b.Port())-int(a.Port()) {
+		return nil
+	}
+	var result []netip.AddrPort
+	for n := 1; n <= 4; n++ {
+		port := int(c.Port()) + n*step
+		if port < 1024 || port > 65535 {
+			break
+		}
+		result = append(result, netip.AddrPortFrom(c.Addr(), uint16(port)))
+	}
+	return result
+}
+
 func runUDP() event {
 	socket, err := net.ListenUDP("udp4", nil)
 	if err != nil {
@@ -128,21 +165,29 @@ func runUDP() event {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	mapped := map[netip.AddrPort]bool{}
+	observers := map[netip.Addr]bool{}
 	endpoints := []string{}
 	for _, server := range []struct {
 		host string
 		port uint16
-	}{{"stun.cloudflare.com", 3478}, {"stun.l.google.com", 19302}} {
-		lookup, stop := context.WithTimeout(ctx, 3*time.Second)
+	}{{"stun.cloudflare.com", 3478}, {"stunserver2025.stunprotocol.org", 3478}, {"stun.l.google.com", 19302}, {"stun1.l.google.com", 19302}} {
+		lookup, stop := context.WithTimeout(ctx, 1500*time.Millisecond)
 		ips, err := net.DefaultResolver.LookupNetIP(lookup, "ip4", server.host)
 		stop()
-		if err != nil || len(ips) == 0 || !publicIPv4(ips[0]) {
+		if err != nil {
 			continue
 		}
-		result, ok := udpMapping(socket, netip.AddrPortFrom(ips[0], server.port))
-		if ok && !mapped[result] {
-			mapped[result] = true
-			endpoints = append(endpoints, result.String())
+		for _, ip := range ips {
+			if !publicIPv4(ip) || observers[ip] {
+				continue
+			}
+			observers[ip] = true
+			result, ok := udpMapping(socket, netip.AddrPortFrom(ip, server.port))
+			if ok {
+				mapped[result] = true
+				endpoints = append(endpoints, result.String())
+			}
+			break
 		}
 	}
 	if len(endpoints) == 0 {
@@ -158,7 +203,7 @@ func runUDP() event {
 		Endpoints []string
 		Token     string
 	}
-	if json.Unmarshal(input.Bytes(), &cmd) != nil || len(cmd.Endpoints) < 1 || len(cmd.Endpoints) > 2 {
+	if json.Unmarshal(input.Bytes(), &cmd) != nil || len(cmd.Endpoints) < 1 || len(cmd.Endpoints) > 4 {
 		return fail("coordination", "invalid_peer")
 	}
 	peers := []netip.AddrPort{}
