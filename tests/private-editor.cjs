@@ -112,12 +112,24 @@ async function test() {
     await page.waitForFunction(() => document.querySelector('dialog.drive-preview[open] audio')?.duration > 0)
     await closePreview()
 
+    const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+
     const chooser = page.waitForEvent('filechooser')
     await drive.getByRole('button', { name: '上传文件', exact: true }).click()
     await (await chooser).setFiles([
       { name: 'sample.png', mimeType: 'image/png', buffer: image },
+      { name: 'sample.gif', mimeType: 'image/gif', buffer: gif },
       { name: 'sample.webm', mimeType: 'video/webm', buffer: video },
     ])
+    for (const name of ['sample.gif', 'sample.webm']) {
+      const tile = drive.getByRole('button', { name: '预览 ' + name, exact: true }).locator('.drive-thumb')
+      await tile.scrollIntoViewIfNeeded()
+      await page.waitForFunction(name => {
+        const card = [...document.querySelectorAll('.drive-file')].find(node => node.title === name)
+        const thumb = card?.querySelector('img')
+        return thumb?.naturalWidth > 0 && thumb.src.startsWith('data:image/')
+      }, name)
+    }
     await openFile('sample.png')
     await page.waitForFunction(() => document.querySelector('dialog.drive-preview[open] img')?.naturalWidth === 1)
     await closePreview()
@@ -236,7 +248,7 @@ async function test() {
     const stored = decrypt(password, JSON.parse(fs.readFileSync(filename, 'utf8')), purpose).value.entries[0]
     assert.equal(stored.kind, 'fixed-pages-v1')
     assert.equal(stored.homes.todo, '2024-06-02')
-    assert.deepEqual(stored.files.map(file => file.name).sort(), ['sample.webm', 'large.wav', '旧录音.wav'].sort())
+    assert.deepEqual(stored.files.map(file => file.name).sort(), ['sample.gif', 'sample.webm', 'large.wav', '旧录音.wav'].sort())
     assert(stored.files.some(file => file.name === '旧录音.wav' && file.src === audioSource))
     for (const [name, size] of [['sample.webm', video.length], ['large.wav', largeSize]]) {
       const file = stored.files.find(f => f.name === name)

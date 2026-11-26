@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
@@ -26,6 +28,7 @@ import android.view.WindowManager;
 import android.view.WindowInsets;
 import android.widget.ImageButton;
 import androidx.core.app.ServiceCompat;
+import androidx.core.content.ContextCompat;
 
 public class PetOverlayService extends Service {
     private static final String CHANNEL = "floating-pet";
@@ -39,6 +42,12 @@ public class PetOverlayService extends Service {
     private NoteOverlay note;
     private ImageButton pet;
     private WindowManager.LayoutParams position;
+    private boolean screenReceiverRegistered;
+    private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) dismissNote();
+        }
+    };
 
     static boolean isRunning() { return running != null; }
     static boolean wanted(Context context) {
@@ -104,6 +113,9 @@ public class PetOverlayService extends Service {
                 Build.VERSION.SDK_INT >= 34 ? ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE : 0);
             addPet();
             running = this;
+            ContextCompat.registerReceiver(this, screenReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF),
+                ContextCompat.RECEIVER_NOT_EXPORTED);
+            screenReceiverRegistered = true;
             return START_STICKY;
         } catch (RuntimeException error) {
             failure = error instanceof SecurityException
@@ -254,6 +266,7 @@ public class PetOverlayService extends Service {
 
     @Override
     public void onDestroy() {
+        if (screenReceiverRegistered) unregisterReceiver(screenReceiver);
         if (note != null) note.close();
         if (pet != null && pet.isAttachedToWindow()) windows.removeViewImmediate(pet);
         if (running == this) running = null;

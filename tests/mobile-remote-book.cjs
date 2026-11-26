@@ -74,6 +74,7 @@ async function configurePhone(page, secure) {
   await page.exposeFunction('fixtureNative', (plugin, method, options) => {
     if (plugin === 'App' && method === 'getLaunchUrl' || plugin === 'MomoSync' && method === 'updateWidget') return {}
     if (plugin === 'MomoUpdates' && method === 'pending') return { status:'ready', target:'' }
+    if (plugin === 'MomoPet' && method === 'state') return { running:true, allowed:true }
     if (plugin === 'SecureStorage') {
       if (method === 'internalGetItem') {
         const value = secure.get(options.prefixedKey)
@@ -104,6 +105,7 @@ async function configurePhone(page, secure) {
         { name:'App', methods:methods(['getLaunchUrl','addListener']) },
         { name:'SecureStorage', methods:methods(['internalGetItem','internalSetItem','internalRemoveItem']) },
         { name:'MomoSync', methods:methods(['updateWidget']) },
+        { name:'MomoPet', methods:methods(['state','addListener']) },
         { name:'MomoUpdates', methods:methods(['pending','addListener']) },
         { name:'InAppBrowser', methods:methods(['addListener']) },
       ],
@@ -247,12 +249,27 @@ async function main() {
     await page.evaluate(() => window.fixtureForeground(true))
     // Leave the host's independent 1.5 s authentication throttle intact.
     await delay(1600)
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty('--safe-area-inset-top', '24px')
+      const panel = document.querySelector('#panel')
+      if (getComputedStyle(panel).top !== '24px') throw new Error('Android app did not apply the delivered status-bar inset')
+      document.documentElement.style.setProperty('--safe-area-inset-top', '0px')
+      if (getComputedStyle(panel).top !== '0px') throw new Error('Already applied insets were not honored')
+      document.documentElement.dataset.momoFloating = 'true'
+      window.dispatchEvent(new Event('momo-floating-open'))
+      Object.defineProperty(document, 'hidden', { configurable:true, get: () => true })
+      window.fixtureForeground(false)
+    })
     await unlock(page, step + 1, true)
     await editor.getByText(edited, {exact:true}).waitFor()
-    relay.kill()
+    await page.evaluate(() => {
+      document.documentElement.dataset.momoFloating = 'false'
+      window.dispatchEvent(new Event('momo-floating-close'))
+      delete document.hidden
+    })
     await lockedScreen(page)
     await checkStorage(page, secure)
-    console.log('PASS Android follower touch unlock, encrypted host edit, background and disconnect lock, no private data in mobile storage')
+    console.log('PASS Android follower fullscreen and overlay unlock, encrypted host edit, background and overlay-close lock')
   } finally {
     if (browser) await browser.close()
     if (host) await host.close()

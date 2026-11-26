@@ -79,6 +79,8 @@ export function createMobileBridge() {
     update: updates.state,
   })
   let privatePickerUntil = 0
+  const inFloatingNote = () => floatingPet && document.documentElement.dataset.momoFloating === 'true'
+  const privateVisible = () => inFloatingNote() || !document.hidden
   const privatePickerActive = () => Boolean(ordinaryBrowser && Date.now() < privatePickerUntil)
   let privateLockListener = noop, ordinaryBrowser, privateWebPage = false
   const privateCredential = () => {
@@ -92,8 +94,7 @@ export function createMobileBridge() {
   const bookOperation = mobileBook(
     async () => transaction(await ready, 'settings', false, store => store.get(primaryPrefix + 'private-book')),
     async value => transaction(await ready, 'settings', true, store => store.put(value, primaryPrefix + 'private-book')),
-    () => changingRole || transferringRole ? '请等待设备角色切换完成后再打开'
-      : document.documentElement.dataset.momoFloating === 'true' ? '请在桃桃全屏界面打开私密便签' : hostSelected,
+    () => changingRole || transferringRole ? '请等待设备角色切换完成后再打开' : hostSelected,
     () => mobileMedia(primaryPrefix))
   async function privateBook(op, args) {
     if (op === 'background' && privatePickerActive()) return
@@ -101,7 +102,6 @@ export function createMobileBridge() {
     if (!locking) {
       await init
       if (changingRole || transferringRole) throw new Error('请等待设备角色切换完成后再打开')
-      if (document.documentElement.dataset.momoFloating === 'true') throw new Error('请在桃桃全屏界面打开私密便签')
     }
     const operation = hostSelected ? bookOperation : followerBook
     if (locking && !hostSelected) restorePrivateBrowser(op === 'background')
@@ -116,7 +116,7 @@ export function createMobileBridge() {
       const entered = typeof args?.password === 'string'
       const password = entered ? args.password : credential && await SecureStorage.getItem(credential).catch(() => null)
       if (typeof password !== 'string') throw missingBookPassword()
-      if (credential !== privateCredential() || changingRole || transferringRole || document.hidden) throw missingBookPassword()
+      if (credential !== privateCredential() || changingRole || transferringRole || !privateVisible()) throw missingBookPassword()
       try { result = await operation(op, { password, code: args.code }) }
       catch (error) {
         if (!entered && /口令错误或文件/.test(error?.message || '')) {
@@ -148,10 +148,13 @@ export function createMobileBridge() {
       if (notify) privateLockListener()
     }
   }
-  window.addEventListener('momo-floating-open', () => {
-    privatePickerUntil = 0
-    void privateBook('background')
-  })
+  for (const event of ['momo-floating-open', 'momo-floating-close']) {
+    window.addEventListener(event, () => {
+      privatePickerUntil = 0
+      void privateBook('background').catch(noop)
+      privateLockListener()
+    })
+  }
   const syncStatus = () => hostSelected ? host.state() : sync.state()
 
   function queueWrite(operation) {
@@ -490,7 +493,8 @@ export function createMobileBridge() {
     if (native) {
       hasKey = Boolean(await SecureStorage.getItem(keyName).catch(() => null))
       await App.addListener('appStateChange', ({ isActive }) => {
-        if (isActive) { void runRefresh(); void backgroundSync() } else void privateBook('background')
+        if (isActive) { void runRefresh(); void backgroundSync() }
+        else if (!inFloatingNote()) void privateBook('background').catch(noop)
       })
       await App.addListener('appUrlOpen', ({ url }) => openWidget(url))
       await InAppBrowser.addListener('browserClosed', () => {
@@ -512,7 +516,7 @@ export function createMobileBridge() {
   })
 
   return {
-    mobile: true, privateBook, privatePickerActive,
+    mobile: true, privateBook, privatePickerActive, privateVisible,
     privatePicker(active) { privatePickerUntil = active ? Date.now() + 90000 : 0 },
     onPrivateLock(callback) { privateLockListener = callback },
     releaseBackup,

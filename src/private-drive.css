@@ -89,6 +89,8 @@
   background: #fff9f8;
 }
 
+.drive-thumb img:not([src]) { display: none; }
+
 .drive-name, .drive-file .drive-detail {
   margin-inline: 9px;
 }

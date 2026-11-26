@@ -184,7 +184,7 @@ function armPrivateLock() {
 }
 async function enterPrivatePages(entries) {
   await saveBeforeSwitch()
-  if (!$('book-dialog').open || state.mode !== 'note' || document.hidden) throw new Error('请重新解锁')
+  if (!$('book-dialog').open || state.mode !== 'note' || !(api.privateVisible?.() ?? !document.hidden)) throw new Error('请重新解锁')
   const store = privatePages(entries, async data => {
     await api.privateBook('save', { entries: data })
     if (privateStore === store) armPrivateLock()
@@ -230,7 +230,7 @@ api.onPrivateLock?.(() => {
   void endPrivatePages(true)
 })
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && privateStore && !api.privatePickerActive?.()) void endPrivatePages(true)
+  if (!(api.privateVisible?.() ?? !document.hidden) && privateStore && !api.privatePickerActive?.()) void endPrivatePages(true)
 })
 
 function errorMessage(error) {

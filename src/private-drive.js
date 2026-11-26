@@ -14,7 +14,7 @@ const displays = {
 }
 const formats = {
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
-  webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic', avif: 'image/avif',
+  webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', avif: 'image/avif',
   mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/mp4', webm: 'video/webm',
   mkv: 'video/x-matroska', avi: 'video/x-msvideo',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav',
@@ -67,56 +67,132 @@ function describe(file) {
   return { kind, info: displays[kind].name + ' · ' + sizeLabel(size), thumb: kind === 'image' ? file.src : undefined }
 }
 
-// Read only the header of small PNG/JPEG images. Other formats and large photos
-// remain previewable without allocating a full-size bitmap just for their tile.
-function thumbnailDimensions(view, type) {
-  if (type === 'image/png' && view.byteLength >= 24 && view.getUint32(0) === 0x89504e47 && view.getUint32(12) === 0x49484452)
-    return [view.getUint32(16), view.getUint32(20)]
-  if (type !== 'image/jpeg' || view.byteLength < 4 || view.getUint16(0) !== 0xffd8) return
-  let offset = 2
-  while (offset + 9 <= view.byteLength && view.getUint8(offset) === 0xff) {
-    const marker = view.getUint8(offset + 1)
-    if (marker === 0xff) { offset++; continue }
-    if ([0xc0, 0xc1, 0xc2].includes(marker)) return [view.getUint16(offset + 7), view.getUint16(offset + 5)]
-    const length = view.getUint16(offset + 2)
-    if (length < 2 || marker === 0xda || marker === 0xd9) return
-    offset += length + 2
-  }
+function waitForMedia(node, event, signal, limit = 4200) {
+  return new Promise((resolve, reject) => {
+    const finish = error => {
+      clearTimeout(timer)
+      node.removeEventListener(event, ready)
+      node.removeEventListener('error', fail)
+      signal?.removeEventListener('abort', fail)
+      if (error) reject(error)
+      else resolve()
+    }
+    const ready = () => finish()
+    const fail = () => finish(new Error('无法读取缩略图'))
+    const timer = setTimeout(fail, limit)
+    node.addEventListener(event, ready, { once: true })
+    node.addEventListener('error', fail, { once: true })
+    signal?.addEventListener('abort', fail, { once: true })
+    if (signal?.aborted) fail()
+  })
 }
 
-async function thumbnail(file, mime) {
-  if (!['image/png','image/jpeg'].includes(mime) || file.size > 8 * chunkSize || typeof createImageBitmap !== 'function') return
-  let bitmap
+function frame(node, width, height) {
+  if (!width || !height) return
+  const scale = Math.min(1, 180 / Math.max(width, height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(width * scale))
+  canvas.height = Math.max(1, Math.round(height * scale))
+  canvas.getContext('2d').drawImage(node, 0, 0, canvas.width, canvas.height)
+  const src = canvas.toDataURL('image/webp', 0.72)
+  if (src.length <= 65536) return src
+}
+
+async function thumbnail(source, mime, signal) {
+  const image = mime.startsWith('image/')
+  if (signal?.aborted || (!image && !mime.startsWith('video/'))) return
+  const node = element(image ? 'img' : 'video')
+  const objectUrl = typeof source !== 'string'
+  const url = objectUrl ? URL.createObjectURL(source.type === mime ? source : source.slice(0, source.size, mime)) : source
   try {
-    const header = new DataView(await file.slice(0, 65536).arrayBuffer())
-    const [width, height] = thumbnailDimensions(header, mime) || []
-    if (!width || !height || width * height > 16000000) return
-    const ratio = Math.min(1, 180 / Math.max(width, height))
-    const options = width >= height ? { resizeWidth: Math.max(1, Math.round(width * ratio)) }
-      : { resizeHeight: Math.max(1, Math.round(height * ratio)) }
-    bitmap = await createImageBitmap(file, options)
-    const canvas = document.createElement('canvas')
-    const scale = Math.min(1, 180 / Math.max(bitmap.width, bitmap.height))
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-    const src = canvas.toDataURL('image/webp', 0.72)
-    if (src.length <= 65536) return src
-  } catch { /* A missing thumbnail does not affect the original file. */ }
-  finally { bitmap?.close() }
+    if (!image) { node.preload = 'auto'; node.muted = true; node.playsInline = true }
+    const loaded = waitForMedia(node, image ? 'load' : 'loadeddata', signal)
+    node.src = url
+    await loaded
+    if (image) return frame(node, node.naturalWidth, node.naturalHeight)
+    const first = frame(node, node.videoWidth, node.videoHeight)
+    const seek = Math.min(1.5, node.duration * .16)
+    if (Number.isFinite(seek) && seek > .08) {
+      const moved = waitForMedia(node, 'seeked', signal, 1800).then(() => true, () => false)
+      try {
+        node.currentTime = seek
+        if (await moved && !signal?.aborted) return frame(node, node.videoWidth, node.videoHeight) || first
+      }
+      catch {}
+    }
+    if (!signal?.aborted) return first
+  } catch { /* A decode failure leaves the file available to open. */ }
+  finally {
+    node.removeAttribute('src')
+    if (!image) node.load()
+    if (objectUrl) URL.revokeObjectURL(url)
+  }
 }
 
 export function privateMediaType(file) {
   const type = file.type.toLowerCase().split(';')[0]
   if (/^(image|video|audio)\/[a-z\d.+-]+$/.test(type)) return type
   const extension = /\.([a-z\d]+)$/i.exec(file.name)?.[1]?.toLowerCase()
-  if ((!type || type === 'application/octet-stream') && Object.hasOwn(formats, extension)) return formats[extension]
+  if ((!type || type.startsWith('application/')) && Object.hasOwn(formats, extension)) return formats[extension]
   throw new Error('请选择图片、视频或音频文件（' + file.name + '）')
 }
 
 export function wirePrivateDrive(container, { save, picker, media }) {
   let files = [], root, input, uploadButton, list, count, status, dialog, previewMedia, observer
   let generation = 0, upload, cancelUpload, pending, previewId, picking = false
+  const generated = new Map(), waiting = new Set(), attempted = new Set()
+  let thumbnailTask
+
+  function rememberThumbnail(file, src) {
+    if (!src || !files.includes(file)) return
+    generated.set(file.id, src)
+    const tile = list.children[files.indexOf(file)]?.querySelector('.drive-thumb img')
+    if (tile) tile.src = src
+  }
+
+  function stopThumbnail() {
+    if (!thumbnailTask) return Promise.resolve()
+    const task = thumbnailTask
+    task.controller.abort()
+    if (task.file.storage === 'chunks-v1') void media('mediaRelease', { id: task.file.id }).catch(() => {})
+    return task.promise
+  }
+
+  function nextThumbnail() {
+    if (thumbnailTask || dialog || !root || !waiting.size) return
+    const file = waiting.values().next().value
+    waiting.delete(file)
+    if (!files.includes(file)) { nextThumbnail(); return }
+    const task = { file, controller: new AbortController() }
+    const signal = task.controller.signal
+    const epoch = generation
+    thumbnailTask = task
+    task.promise = (async () => {
+      try {
+        const url = file.storage === 'chunks-v1' ? await media('mediaPreview', { id: file.id }) : file.src
+        if (signal.aborted) return
+        const mime = file.mime || /^data:([^;,]+)/.exec(url)?.[1] || ''
+        const src = await thumbnail(url, mime, signal)
+        if (epoch === generation && !signal.aborted) rememberThumbnail(file, src)
+      } catch {} finally {
+        if (file.storage === 'chunks-v1') await media('mediaRelease', { id: file.id }).catch(() => {})
+        if (thumbnailTask === task) thumbnailTask = undefined
+        nextThumbnail()
+      }
+    })()
+  }
+
+  function fillThumb(img, file) {
+    const { thumb } = describe(file)
+    const src = generated.get(file.id) || thumb
+    if (src) { img.src = src; return }
+    // For legacy files, avoid opening very large encrypted attachments just to display a tile.
+    if ((file.storage === 'chunks-v1' ? file.size > 12 * chunkSize : file.src.length > 16 * chunkSize) ||
+        attempted.has(file.id)) return
+    attempted.add(file.id)
+    waiting.add(file)
+    nextThumbnail()
+  }
 
   function finishPicker() {
     if (picking) picker?.(false)
@@ -138,10 +214,15 @@ export function wirePrivateDrive(container, { save, picker, media }) {
     }
     dialog?.remove()
     dialog = undefined
+    queueMicrotask(nextThumbnail)
   }
 
   function hide() {
     generation++
+    waiting.clear()
+    attempted.clear()
+    generated.clear()
+    void stopThumbnail()
     finishPicker()
     upload?.abort()
     upload = undefined
@@ -186,6 +267,7 @@ export function wirePrivateDrive(container, { save, picker, media }) {
     const item = element('dialog', 'drive-preview')
     item.setAttribute('aria-label', file.name)
     dialog = item
+    const idleThumbnails = stopThumbnail()
     const bar = element('header', 'drive-preview-bar')
     const title = element('h2', '', file.name)
     const close = action('', 'drive-close', closeIcon)
@@ -206,18 +288,30 @@ export function wirePrivateDrive(container, { save, picker, media }) {
       if (kind === 'image') player.alt = file.name
       else {
         player.controls = true
-        player.preload = 'metadata'
+        player.preload = kind === 'video' ? 'auto' : 'metadata'
         if (kind === 'video') player.playsInline = true
       }
       player.onerror = () => { player.hidden = true; fallback.hidden = false }
+      if (!describe(file).thumb && !generated.has(file.id) && kind !== 'audio') {
+        player.addEventListener(kind === 'video' ? 'loadeddata' : 'load', () => {
+          if (dialog !== item) return
+          try {
+            rememberThumbnail(file, kind === 'image'
+              ? frame(player, player.naturalWidth, player.naturalHeight)
+              : frame(player, player.videoWidth, player.videoHeight))
+          } catch {}
+        }, { once: true })
+      }
       if (kind === 'audio') stage.append(icon(audioIcon))
       stage.append(player)
       if (file.storage === 'chunks-v1') {
         previewId = file.id
         player.hidden = true
         fallback.textContent = '正在打开…'
-        void media('mediaPreview', { id: file.id }, (done, total) => {
-          if (dialog === item && item.open && total) fallback.textContent = '正在打开… ' + Math.floor(100 * done / total) + '%'
+        void idleThumbnails.then(() => {
+          if (dialog === item && item.open) return media('mediaPreview', { id: file.id }, (done, total) => {
+            if (dialog === item && item.open && total) fallback.textContent = '正在打开… ' + Math.floor(100 * done / total) + '%'
+          })
         }).then(url => {
           if (dialog !== item || !item.open) return
           fallback.textContent = '当前设备无法预览此文件。'
@@ -271,24 +365,24 @@ export function wirePrivateDrive(container, { save, picker, media }) {
     list.replaceChildren()
     count.textContent = files.length + ' 个文件'
     for (const file of files) {
-      const { kind, info, thumb } = describe(file)
+      const { kind, info } = describe(file)
       const card = action('', 'drive-file')
       card.setAttribute('aria-label', '预览 ' + file.name)
       card.title = file.name
       const tile = element('span', 'drive-thumb drive-' + (kind || 'image'))
       tile.append(icon(displays[kind]?.icon || imageIcon))
-      if (kind === 'image' && thumb) {
+      if (kind === 'image' || kind === 'video') {
         const img = element('img')
         img.alt = ''
         img.decoding = 'async'
         img.loading = 'lazy'
-        img.onerror = () => img.remove()
+        img.onerror = () => img.removeAttribute('src')
         tile.append(img)
         if (observer) {
           // Keep offscreen image payloads out of the DOM until the card scrolls into view.
-          img.dataset.index = String(list.childElementCount)
-          observer.observe(img)
-        } else img.src = thumb
+          tile.dataset.index = String(list.childElementCount)
+          observer.observe(tile)
+        } else fillThumb(img, file)
       }
       const name = element('span', 'drive-name', file.name)
       card.append(tile, name, element('span', 'drive-detail', info))
@@ -336,7 +430,7 @@ export function wirePrivateDrive(container, { save, picker, media }) {
           finished.push(record)
           staging = undefined
           check()
-          const thumb = await thumbnail(file, mime)
+          const thumb = await thumbnail(file, mime, controller.signal)
           if (thumb) record.thumb = thumb
         }
         check()
@@ -393,7 +487,8 @@ export function wirePrivateDrive(container, { save, picker, media }) {
         for (const { target, isIntersecting } of changes) {
           if (!root?.contains(target) || !isIntersecting) continue
           const file = files[Number(target.dataset.index)]
-          if (file) target.src = describe(file).thumb
+          const img = target.querySelector('img')
+          if (file && img) fillThumb(img, file)
           observer.unobserve(target)
         }
       }, { root: list, rootMargin: '70px' })

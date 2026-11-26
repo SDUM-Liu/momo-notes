@@ -103,7 +103,7 @@ export function wirePrivateBook(api, enter) {
       const data = await api.privateBook('unlock', { ...(otpOnly ? {} : { password: password.value }), code: code.value })
       unlocked = true
       if (!dialog.open || generation !== version) return
-      if (document.hidden) { dialog.close(); return }
+      if (!(api.privateVisible?.() ?? !document.hidden)) { dialog.close(); return }
       await enter(data)
       if (generation !== version) return
       handedOff = true
