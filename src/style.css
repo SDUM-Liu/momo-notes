@@ -383,12 +383,12 @@ html:not([data-momo-floating="true"]) body[data-platform="mobile"] {
   --momo-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
   --momo-safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
 }
-/* Capacitor publishes zero when the Android root already applies these insets. */
+/* Android reserves the safe area outside the WebView in MainActivity. */
 html:not([data-momo-floating="true"]) body[data-mobile-os="android"] {
-  --momo-safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
-  --momo-safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
-  --momo-safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
-  --momo-safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --momo-safe-top: 0px;
+  --momo-safe-right: 0px;
+  --momo-safe-bottom: 0px;
+  --momo-safe-left: 0px;
 }
 html:not([data-momo-floating="true"]) body[data-platform="mobile"] :is(.panel, .chat-dialog) {
   inset: var(--momo-safe-top) var(--momo-safe-right) var(--momo-safe-bottom) var(--momo-safe-left);

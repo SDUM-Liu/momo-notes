@@ -5,7 +5,7 @@
   "plugins": {
     "SystemBars": {
       "style": "LIGHT",
-      "initialViewportFitValueHint": "cover"
+      "insetsHandling": "disable"
     }
   }
 }

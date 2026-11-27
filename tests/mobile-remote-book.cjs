@@ -252,9 +252,8 @@ async function main() {
     await page.evaluate(() => {
       document.documentElement.style.setProperty('--safe-area-inset-top', '24px')
       const panel = document.querySelector('#panel')
-      if (getComputedStyle(panel).top !== '24px') throw new Error('Android app did not apply the delivered status-bar inset')
-      document.documentElement.style.setProperty('--safe-area-inset-top', '0px')
-      if (getComputedStyle(panel).top !== '0px') throw new Error('Already applied insets were not honored')
+      if (getComputedStyle(panel).top !== '0px') throw new Error('Android duplicated the native status-bar inset')
+      document.documentElement.style.removeProperty('--safe-area-inset-top')
       document.documentElement.dataset.momoFloating = 'true'
       window.dispatchEvent(new Event('momo-floating-open'))
       Object.defineProperty(document, 'hidden', { configurable:true, get: () => true })

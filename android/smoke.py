@@ -85,6 +85,10 @@ def check_status_bar():
     settings = find_node(tree, '设置')
     _, top, _, _ = map(int, re.findall(r'\d+', settings.attrib['bounds']))
     assert top >= bottom, f'The note toolbar starts at {top}, within the Android status bar ending at {bottom}'
+    density = int(re.findall(r'density:\s*(\d+)', shell('wm', 'density'))[-1])
+    gap = (top - bottom) * 160 / density
+    assert gap <= 18, f'The settings button starts {gap:.1f} dp below the status bar, indicating excess top padding'
+    print(f'PASS Android settings button starts {gap:.1f} dp below the status bar')
 
 
 def open_floating_note():
